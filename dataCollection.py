@@ -31,7 +31,7 @@ BAUD          = 921600
 SAMPLE_RATE   = 8000
 DURATION      = 5              # giay moi mau
 TOTAL_SAMPLES = 1800           # khong con dung, giu lai de tuong thich
-DATASET_DIR   = "dataset_v6/normal"
+DATASET_DIR   = "dataset_v7/normal"
 
 # Truc trong luc (X = doc = huong xuan dat)
 # Xac dinh bang cach do thuc te khi may dung yen:
