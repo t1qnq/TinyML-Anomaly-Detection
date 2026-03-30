@@ -1,0 +1,15 @@
+# Bỏ qua file build của App Flutter
+tinyml_app/build/
+tinyml_app/.dart_tool/
+tinyml_app/android/.gradle/
+
+# Bỏ qua file rác của Firmware
+firmware_v10/.pio/
+firmware_v10/build/
+
+# Bỏ qua file cache của Python
+__pycache__/
+*.pyc
+
+# QUAN TRỌNG: Chặn thư mục dataset nếu nó nặng hơn 100MB
+dataset_v6/
