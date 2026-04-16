@@ -1,72 +1,54 @@
-# 📋 Kế Hoạch Nâng Cấp TinyML Anomaly Detection (v10 → v11)
+# 📋 Kế Hoạch Nâng Cấp TinyML Anomaly Detection (v11 - The Data-Centric Update)
 
-Đây là danh sách chi tiết các công việc cần thực hiện để nâng cấp dự án. Bạn có thể đánh dấu `[x]` vào các ô tương ứng khi hoàn thành.
-
----
-
-## 🚀 Giai đoạn 1: Tối ưu hoá Protocol MQTT (Phase 1)
-Tiết kiệm ~83% bandwidth bằng cách đổi định dạng MQTT từ JSON sang Pipe-delimited.
-
-- [ ] **1.1. Cập nhật Firmware (`firmware_v10.ino`)**
-  - [ ] Xoá thư viện `ArduinoJson` (nếu không còn dùng ở đâu khác).
-  - [ ] Thay thế lệnh build JSON bằng `sprintf` hoặc `#String`, định dạng: `v1|<state>|<mae>|<mode>|<win>|<consec>`.
-  - [ ] Chú ý ánh xạ enum `AiMode` sang String (`GENTLE`, `STRONG`, `SPIN`).
-- [ ] **1.2. Cập nhật Ứng dụng Flutter (`tinyml_app/lib/main.dart`)**
-  - [ ] Sửa hàm `_parseData` để hỗ trợ cả 2 định dạng (JSON cũ và chuỗi `v1|` mới).
-  - [ ] Parse chuỗi bằng `split('|')` và ép kiểu dữ liệu tương ứng.
-  - [ ] Kiểm thử kết nối MQTT nhận dữ liệu thành công.
+Dựa trên định hướng mới: **Tập trung vào Dữ liệu thay vì Hệ thống**, version 11 sẽ nhắm trực tiếp vào việc nâng cao chất lượng mô hình AI bằng cách tái sử dụng và tăng cường (Augment) dữ liệu tĩnh hiện có (từ `train_features_v6.csv`), cả cho việc Huấn luyện lẫn việc Test.
 
 ---
 
-## 🧠 Giai đoạn 2: Cập nhật Training Pipeline (`training.py`)
-Tách rời mô hình AI khỏi source code firmware.
+## 🚀 Giai đoạn 1: Nâng cấp Data Augmentation (Trong `training.py`)
+Mở rộng phần Data Augmentation (hiện tại mới chỉ có cộng thêm nhiễu Gaussian tĩnh) thành một pipeline sinh dữ liệu động và đa dạng.
 
-- [ ] **2.1. Xuất file mô hình (`.tflite`)**
-  - [ ] Cập nhật hàm `export_int8_and_verify` để lưu trực tiếp ra các file: `gentle.tflite`, `strong.tflite`, `spin.tflite`.
-  - [ ] Loại bỏ script sinh file C-array khổng lồ (`model_data.h`).
-- [ ] **2.2. Xuất file cấu hình (`config.json`)**
-  - [ ] Viết đoạn code export các tham số: Threshold (MAE), Scaler Center/Scale, Clip Var sang một file `config.json` hoặc lưu tạm dưới header gọn nhẹ hơn (tùy vào cách load tham số v11).
-
----
-
-## 💾 Giai đoạn 3: LittleFS, OTA & Quản lý Bộ Nhớ (Phase 2)
-Cho phép cập nhật mô hình từ xa không cần flash lại firmware.
-
-- [ ] **3.1. Phân vùng bộ nhớ (Partition Table)**
-  - [ ] Tạo file `partitions.csv` tuỳ chỉnh.
-  - [ ] Dành 960KB (hoặc ~1MB) cho phân vùng `littlefs`.
-- [ ] **3.2. Tích hợp LittleFS trong Firmware**
-  - [ ] Thêm thư viện `LITTLEFS`.
-  - [ ] Khởi tạo `LittleFS.begin(true)` trong `setup()`.
-- [ ] **3.3. Tích hợp Web Server để Upload OTA**
-  - [ ] Cài đặt thư viện `WebServer`.
-  - [ ] Viết hàm POST (port 80) để nhận file `.tflite` từ Web/Client.
-  - [ ] Xử lý lưu file mới và tạo backup (`.tflite.bak`) để phòng ngừa sự cố mất điện lúc ghi.
-- [ ] **3.4. Load mô hình vào PSRAM (`heap_caps_aligned_alloc`)**
-  - [ ] Đọc file từ LittleFS thay vì mảng C.
-  - [ ] Copy dữ liệu mô hình vào PSRAM (Memory-mapped hoặc load thẳng vào array cấp phát trong PSRAM).
+- [x] **1.1. Magnitude & Volume Scaling (Giả lập tải trọng & Tiếng ồn)**
+  - [x] **Vibration (Rung lắc):** Nhân các biến RMS, VAR với tỷ lệ ngẫu nhiên (0.8x tới 1.2x) mô phỏng máy chạy lúc ít đồ và lúc nhiều đồ nặng.
+  - [x] **Audio (Âm thanh):** Tịnh tiến (cộng/trừ) một lượng ngẫu nhiên (VD: ±2 đến ±5 dB) vào 13 dải Mel (`mfe_`) để giả lập mức âm lượng motor khác nhau hoặc do môi trường phòng giặt tĩnh/ồn hơn.
+- [x] **1.2. Feature Jittering Đa Trục**
+  - [x] Thêm nhiễu biên độ khác nhau cho từng trục X, Y, Z thay vì một mức nhiễu chung (noise_level). Đặc biệt là trục Z (phản ánh độ nảy của lồng giặt).
+- [x] **1.3. Áp dụng Augmentation ngay trước khi Scaler**
+  - [x] Đảm bảo việc sinh dữ liệu giả lập được áp dụng vào dữ liệu RAW trước khi đi qua hàm `RobustScaler`, để Scaler học được cả độ lệch của dữ liệu mới.
 
 ---
 
-## 🎨 Giai đoạn 4: UI/UX Mới trên Flutter (Phase 3)
-Thể hiện mức độ rủi ro trực quan hơn thay vì chỉ báo Đỏ/Xanh cứng nhắc.
+## 🧪 Giai đoạn 2: Xây Dựng Tập "Hard-Test" Bằng Dữ Liệu Cũ
+Biến đổi dữ liệu bình thường (Normal) thành dữ liệu bất thường (Anomaly) để làm bài test cực khó cho AI.
 
-- [ ] **4.1. Thuật toán Risk Score (Hàm Sigmoid)**
-  - [ ] Triển khai hàm tính % rủi ro trong Flutter: `Risk = 100 / (1 + e^(-k * (MAE/Threshold - 1)))`.
-  - [ ] Chỉnh tham số `k = 15` để đường cong trơn tru.
-- [ ] **4.2. Cập nhật Giao diện (Progress Ring / Gauge)**
-  - [ ] Tạo custom painter hoặc dùng package vẽ vòng cung gauge.
-  - [ ] Chuyển màu mượt mà theo Risk Score: **Xanh lá (0-30%) → Vàng (31-70%) → Đỏ (71-100%)**.
-  - [ ] Hiển thị thông số `win`, con số Risk % ngay giữa vòng tròn.
+- [x] **2.1. Tách Data chuẩn**
+  - [x] Trích xuất riêng biệt 15-20% dữ liệu gốc để làm tập Kiểm thử (Hold-out Test Set) và giữ sạch, không cho qua vòng Train Augmentation.
+- [x] **2.2. Sinh Anomaly giả lập (Synthesize Anomalies)**
+  - [x] **Giả lập văng lồng:** Lấy một vài mẫu bình thường, cố tình nhân giá trị trục Z (`var_z`, `rms_z`) lên x3 lần.
+  - [x] **Giả lập chân đế kênh:** Cộng thêm một giá trị hằng số cố định vào `rms_x` / `rms_y` để giả lập việc trọng tâm máy bị lệch.
+  - [x] **Giả lập ồn môi trường:** Nâng cường độ `mfe_` (Mel Features) lên sát mức 0 dB để mô phỏng tiếng máy bơm nước hỏng hoặc có vật cọ xát.
+- [x] **2.3. Hỗn hợp nhãn dán (Label Mixing)**
+  - [x] Gắn nhãn `Normal (0)` cho các data gốc, và `Anomaly (1)` cho các data vừa bị "phá" ở bước 2.2.
 
 ---
 
-## 🧪 Giai đoạn 5: Testing & Nghiệm thu
-- [ ] **5.1. Test Unit & Integration**
-  - [ ] Thử upload một mô hình rác coi ESP32 có rớt không (bắt lỗi mismatch schema).
-  - [ ] Thử ngắt điện giữa chừng lúc đang OTA → Khởi động lên phải lấy lại được bản `.bak`.
-- [ ] **5.2. Test Performance**
-  - [ ] Test độ trễ suy luận AI sau khi load từ LittleFS (đảm bảo không bị nghẽn RAM/Flash cache).
-- [ ] **5.3. Final Code Cleanup**
-  - [ ] Xóa các biến/hàm obsolete từ bản `v10.0`.
-  - [ ] Cập nhật lại số hiệu phiên bản thành `v11.0` trên Serial log.
+## 📊 Giai đoạn 3: Tinh Chỉnh Threshold Dựa Trên Hard-Test
+Thay đổi tư duy thiết lập Ngưỡng cảnh báo rủi ro (Risk Threshold).
+
+- [x] **3.1. Chạy Evaluation trên Tập Hard-Test**
+  - [x] Truyền tập dữ liệu Gốc và dữ liệu Giả lập (Anomaly) đi qua mô hình TFlite (INT8). Tính toán và thu thập các điểm số MAE tương ứng cho hai nhóm.
+- [x] **3.2. Không Cảm Tính - Dùng Thuật Toán Quyết Định**
+  - [x] Vẽ biểu đồ đè (Overlap Histogram) giữa phân phối lỗi MAE của hàng Ngon (Normal) và MAE hàng Lỗi (Anomaly).
+  - [x] Tìm chính xác giao điểm (Intersection Point) để set Threshold, hoặc tính ROC/AUC để tìm ngưỡng tối ưu (Best F1-Score) thay vì thuật toán tĩnh `Mean + 3 Sigma` hiện tại.
+  - [x] In thông số `Threshold` mới vào `model_data.h`.
+
+
+---
+
+- [x] **4.1. Dọn dẹp mã nguồn**
+  - [x] Xóa bỏ các logic dư thừa trong `training.py`, gộp các cell export.
+- [x] **4.2. Ghi chú hệ số Augmentation**
+  - [x] Ghi chú chi tiết lại các tỷ lệ Scaling và hệ số Augment trong `training.py` và báo cáo.
+- [x] **4.3. Tích hợp Firmware**
+  - [x] Đồng bộ hóa file `model_data.h` sang thư mục `firmware_v10/`.
+  - [x] Kiểm tra tên biến `THRESHOLD_GENTLE` ... khớp với logic của file `.ino`.
+

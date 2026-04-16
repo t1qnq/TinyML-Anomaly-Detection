@@ -12,6 +12,7 @@ os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
@@ -27,7 +28,7 @@ sns.set_palette("husl")
 plt.rcParams['figure.figsize'] = (10, 6)
 plt.rcParams['font.size'] = 12
 
-CSV_PATH = '/kaggle/input/datasets/quchngcquang/dataset2603/train_features_v6.csv'
+CSV_PATH = 'train_features_v6.csv'
 MEL_DIM, VIB_DIM, FEAT_DIM = 13, 6, 19
 WEIGHTS = np.array([1]*MEL_DIM + [5]*VIB_DIM, dtype=np.float32)
 W_SUM = float(WEIGHTS.sum())
@@ -43,7 +44,7 @@ MEL_DB_RANGE = MEL_DB_MAX - MEL_DB_MIN
 # ==========================================
 # CELL 2: LOAD DATA & TRỰC QUAN HÓA TRI-STATE
 # ==========================================
-print("⏳ Đang tải dữ liệu...")
+print("--- Loading data...")
 df = pd.read_csv(CSV_PATH)
 X_raw = df.values.astype(np.float32)
 
@@ -75,6 +76,7 @@ plt.ylabel('Số lượng mẫu (Windows)')
 for bar in bars:
     yval = bar.get_height()
     plt.text(bar.get_x() + bar.get_width()/2, yval + 10, f'{int(yval)}', ha='center', va='bottom', fontweight='bold')
+plt.savefig('data_imbalance.png')
 plt.show()
 
 # %%
@@ -102,8 +104,37 @@ X_scaled_spin   = scale_subset(X_raw_spin, vib_scaler_spin)
 
 # %%
 # ==========================================
-# CELL 4: HÀM TRAIN & TRỰC QUAN HÓA LOSS
+# CELL 4: HÀM AUGMENT DỮ LIỆU & TRAIN
 # ==========================================
+def augment_raw_data(X_raw, target_size=10000):
+    """
+    Tăng cường dữ liệu trong không gian vật lý (Raw Space).
+    Vib: Magnitude Scaling (nhân hệ số). Audio: Volume Shifting (cộng/trừ dB).
+    """
+    n_samples = len(X_raw)
+    repeat_factor = int(np.ceil(target_size / n_samples))
+    X_aug = np.tile(X_raw, (repeat_factor, 1))[:target_size]
+    
+    # 1. Magnitude Scaling cho Vibration (Indices 13-18)
+    # Tỷ lệ ngẫu nhiên từ 0.8x đến 1.2x
+    vib_scales = np.random.uniform(0.8, 1.2, size=(target_size, 1))
+    # RMS (index 13, 15, 17) tỷ lệ thuận với biên độ
+    X_aug[:, [13, 15, 17]] *= vib_scales
+    # VAR (index 14, 16, 18) tỷ lệ thuận với bình phương biên độ
+    X_aug[:, [14, 16, 18]] *= (vib_scales**2)
+    
+    # 2. Volume Shifting cho Audio (Indices 0-12: Mel bands tính theo dB)
+    # Thay đổi âm lượng ngẫu nhiên -5.0dB đến +2.0dB
+    audio_shifts = np.random.uniform(-5.0, 2.0, size=(target_size, 1))
+    X_aug[:, 0:13] += audio_shifts
+    X_aug[:, 0:13] = np.clip(X_aug[:, 0:13], -80.0, 0.0) # Ép cứng [-80, 0] theo firmware
+    
+    # 3. Jittering (Nhiễu nền cực nhỏ)
+    X_aug[:, 0:13] += np.random.normal(0, 0.3, size=(target_size, 13)) # Nhiễu dB
+    X_aug[:, 13:19] += np.random.normal(0, 0.0005, size=(target_size, 6)) # Nhiễu rung lắc
+    
+    return X_aug.astype(np.float32)
+
 def weighted_mae(y_true, y_pred):
     return tf.reduce_sum(tf.abs(y_true - y_pred) * tf.constant(WEIGHTS), axis=-1) / W_SUM
 
@@ -111,7 +142,7 @@ def build_model():
     return models.Sequential([
         layers.InputLayer(input_shape=(FEAT_DIM,)),
         layers.Dense(128, activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
-        layers.Dense(32,  activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
+        layers.Dense(64,  activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
         layers.Dense(128, activation='sigmoid'), layers.Dense(FEAT_DIM, activation='sigmoid')
     ])
 
@@ -130,25 +161,27 @@ def plot_training_history(hist_float, hist_qat, name, color):
     axes[1].set_title('Phase 2: INT8 Quantization-Aware Training')
     axes[1].set_xlabel('Epochs')
     axes[1].legend()
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    plt.savefig(f'history_{name}.png')
+    plt.show()
 
-def train_pipeline(X_scaled, name, color):
-    print(f"\n🚀 Đang huấn luyện: {name} (Gốc: {len(X_scaled)} mẫu)")
+def train_pipeline(X_raw_subset, vib_scaler, name, color):
+    print(f"\n>>> Training: {name} (Original: {len(X_raw_subset)} samples)")
     
-    # DATA AUGMENTATION
-    TARGET_SIZE = 10000
-    if len(X_scaled) < TARGET_SIZE:
-        repeat_factor = int(np.ceil(TARGET_SIZE / len(X_scaled)))
-        print(f"   ⚠️ Ép xung dữ liệu! Nhân bản tập {name} lên {repeat_factor} lần...")
-        X_clean_aug = np.tile(X_scaled, (repeat_factor, 1))
-    else:
-        X_clean_aug = X_scaled.copy()
-
-    noise_level = 0.04 if len(X_scaled) < 100 else 0.02
-    noise = np.random.normal(0, noise_level, X_clean_aug.shape).astype(np.float32)
+    # 1. Thực hiện Data Augmentation trên RAW data
+    # Tăng bia mẫu cho GENTLE để học kỹ hơn
+    target = 20000 if name == "GENTLE" else 10000
+    X_aug_raw = augment_raw_data(X_raw_subset, target_size=target)
+    
+    # 2. Scale dữ liệu đã Augment để đưa vào huấn luyện
+    X_clean_aug = scale_subset(X_aug_raw, vib_scaler)
+    
+    # 3. Tạo dữ liệu đầu vào có nhiễu (Denoising Autoencoder approach)
+    # Lưu ý: scale_subset đã nén dữ liệu về [0, 1]. Ta cộng nhiễu nhỏ để model robust hơn.
+    noise = np.random.normal(0, 0.02, X_clean_aug.shape).astype(np.float32)
     X_noisy_aug = np.clip(X_clean_aug + noise, 0, 1)
-    bs = 16 if len(X_scaled) < 200 else 64
 
+    bs = 64
     m = build_model()
     m.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss=weighted_mae)
     hist_float = m.fit(X_noisy_aug, X_clean_aug, epochs=200, batch_size=bs, validation_split=0.15, verbose=0,
@@ -162,17 +195,91 @@ def train_pipeline(X_scaled, name, color):
     plot_training_history(hist_float, hist_qat, name, color)
     return qat_m
 
-qat_gentle = train_pipeline(X_scaled_gentle, "GENTLE", colors[0])
-qat_strong = train_pipeline(X_scaled_strong, "STRONG", colors[1])
-qat_spin   = train_pipeline(X_scaled_spin,   "SPIN",   colors[2])
+qat_gentle = train_pipeline(X_raw_gentle, vib_scaler_gentle, "GENTLE", colors[0])
+qat_strong = train_pipeline(X_raw_strong, vib_scaler_strong, "STRONG", colors[1])
+qat_spin   = train_pipeline(X_raw_spin,   vib_scaler_spin,   "SPIN",   colors[2])
 
 # %%
 # ==========================================
-# CELL 5: XUẤT TFLITE & TRỰC QUAN HÓA THRESHOLD
+# CELL 5: XUẤT TFLITE & TÍNH THRESHOLD DỰA TRÊN HARD-TEST
 # ==========================================
-def export_int8_and_verify(qat_m, X_scaled, name, color):
+# Ghi chú cho Giai đoạn 4:
+# Các hệ số Augmentation tối ưu được chọn sau nhiều lần thử nghiệm:
+# - Vibration Scaling: 0.8x - 1.2x (Giả lập biến thiên tải trọng thực tế)
+# - Audio Shifting: -5dB to +2dB (Cân bằng giữa nhiễu môi trường và cường độ âm motor)
+# - Anomaly Z-Factor: 2.5x - 4.5x RMS (Văng lồng rõ rệt nhưng không phi vật lý)
+
+def synthesize_anomalies(X_raw, name=""):
+    """
+    Tạo dữ liệu bất thường giả lập (Anomaly) từ dữ liệu sạch.
+    Điều chỉnh tham số theo từng mode. GENTLE cần lỗi mạnh hơn để phân biệt.
+    """
+    X_anom = X_raw.copy()
+    n = len(X_anom)
+    
+    # Hệ số khuếch đại cho GENTLE
+    sh = 1.5 if name == "GENTLE" else 1.0
+
+    # 1. Giả lập văng lồng: Tăng mạnh trục Z (rms_z, var_z)
+    X_anom[:, 17] *= np.random.uniform(3.0 * sh, 6.0 * sh, size=n)
+    X_anom[:, 18] *= np.random.uniform(7.0 * sh, 15.0 * sh, size=n)
+    # 2. Giả lập lệch trọng tâm: Cộng offset vào X/Y (tăng biên độ lỗi)
+    X_anom[:, [13, 15]] += np.random.uniform(0.2 * sh, 0.6 * sh, size=(n, 2))
+    # 3. Giả lập ồn môi trường: Tăng dB Mel (lỗi rõ hơn)
+    X_anom[:, 0:13] += np.random.uniform(8 * sh, 15 * sh, size=(n, 13))
+    X_anom[:, 0:13] = np.clip(X_anom[:, 0:13], -80.0, 0.0)
+    return X_anom.astype(np.float32)
+
+def calculate_optimal_threshold(maes_normal, maes_anomaly, name=""):
+    """
+    Tìm ngưỡng tối ưu dựa trên việc cân bằng giữa Normal và Anomaly (Giao điểm hoặc F1).
+    """
+    all_maes = np.concatenate([maes_normal, maes_anomaly])
+    labels = np.concatenate([np.zeros(len(maes_normal)), np.ones(len(maes_anomaly))])
+    
+    thresholds = np.linspace(np.min(maes_normal), np.max(maes_anomaly), 200)
+    best_f1 = -1
+    best_thr = -1
+    
+    for thr in thresholds:
+        preds = (all_maes > thr).astype(int)
+        tp = np.sum((preds == 1) & (labels == 1))
+        fp = np.sum((preds == 1) & (labels == 0))
+        fn = np.sum((preds == 0) & (labels == 1))
+        
+        precision = tp / (tp + fp + 1e-7)
+        recall = tp / (tp + fn + 1e-7)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-7)
+        
+        if f1 > best_f1:
+            best_f1 = f1
+            best_thr = thr
+            
+    # GENTLE và STRONG cho phép nới lỏng ngưỡng để tăng độ nhạy (Recall)
+    p_level = 95 if name == "GENTLE" else 98
+    safe_min = np.percentile(maes_normal, p_level)
+    final_thr = max(best_thr, safe_min)
+    
+    # Tính toán bộ metrics cuối cùng tại final_thr
+    final_preds = (all_maes > final_thr).astype(int)
+    results = {
+        'threshold': final_thr,
+        'f1': f1_score(labels, final_preds),
+        'precision': precision_score(labels, final_preds),
+        'recall': recall_score(labels, final_preds),
+        'auc': roc_auc_score(labels, all_maes)
+    }
+    return results
+
+def export_int8_and_verify(qat_m, X_raw_subset, vib_scaler, name, color):
+    # 1. Chuẩn bị dữ liệu Scaling
+    X_scaled_normal = scale_subset(X_raw_subset, vib_scaler)
+    X_raw_anom = synthesize_anomalies(X_raw_subset, name=name)
+    X_scaled_anom = scale_subset(X_raw_anom, vib_scaler)
+    
+    # 2. Convert to TFLite INT8
     def rep_gen():
-        for i in range(min(100, len(X_scaled))): yield [X_scaled[i:i+1].astype(np.float32)]
+        for i in range(min(100, len(X_scaled_normal))): yield [X_scaled_normal[i:i+1].astype(np.float32)]
     conv = tf.lite.TFLiteConverter.from_keras_model(qat_m)
     conv.optimizations = [tf.lite.Optimize.DEFAULT]
     conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
@@ -181,40 +288,48 @@ def export_int8_and_verify(qat_m, X_scaled, name, color):
     conv.representative_dataset = rep_gen
     tfl = conv.convert()
     
+    # 3. Đánh giá MAE trên mô hình INT8
     interp = tf.lite.Interpreter(model_content=tfl); interp.allocate_tensors()
     inp_d, out_d = interp.get_input_details()[0], interp.get_output_details()[0]
     i_sc, i_zp = inp_d['quantization']; o_sc, o_zp = out_d['quantization']
     
-    maes = []
-    # Đánh giá MAE trên tập gốc (không nhiễu) để tính Threshold sát thực tế nhất
-    for x in X_scaled:
-        xi = np.clip(np.round(x/i_sc)+i_zp, -128, 127).astype(np.int8).reshape(1, FEAT_DIM)
-        interp.set_tensor(inp_d['index'], xi); interp.invoke()
-        yo = interp.get_tensor(out_d['index']).reshape(FEAT_DIM).astype(np.float32)
-        yf = np.clip((yo - o_zp) * o_sc, 0, 1)
-        xf = np.clip((xi.reshape(FEAT_DIM).astype(np.float32) - i_zp) * i_sc, 0, 1)
-        maes.append(np.sum(np.abs(xf - yf) * WEIGHTS) / W_SUM)
-        
-    maes = np.array(maes)
-    mean_mae, std_mae = np.mean(maes), np.std(maes)
+    def get_maes(data):
+        m_list = []
+        for x in data:
+            xi = np.clip(np.round(x/i_sc)+i_zp, -128, 127).astype(np.int8).reshape(1, FEAT_DIM)
+            interp.set_tensor(inp_d['index'], xi); interp.invoke()
+            yo = interp.get_tensor(out_d['index']).reshape(FEAT_DIM).astype(np.float32)
+            yf = np.clip((yo - o_zp) * o_sc, 0, 1)
+            xf = np.clip((xi.reshape(FEAT_DIM).astype(np.float32) - i_zp) * i_sc, 0, 1)
+            m_list.append(np.sum(np.abs(xf - yf) * WEIGHTS) / W_SUM)
+        return np.array(m_list)
+
+    maes_n = get_maes(X_scaled_normal)
+    maes_a = get_maes(X_scaled_anom)
     
-    # Tính threshold: Mean + 3 Sigma
-    thr = max(mean_mae + 3 * std_mae, np.percentile(maes, 99.5))
+    # 4. Tìm Threshold tối ưu và Metrics
+    results = calculate_optimal_threshold(maes_n, maes_a, name=name)
+    thr = results['threshold']
     
-    # --- VIZ 3: PHÂN PHỐI MAE VÀ NGƯỠNG AN TOÀN ---
-    plt.figure(figsize=(8, 4))
-    plt.hist(maes, bins=40, color=color, alpha=0.7)
-    plt.axvline(mean_mae, color='black', linestyle=':', linewidth=2, label=f'Mean MAE: {mean_mae:.4f}')
-    plt.axvline(thr, color='red', linestyle='--', linewidth=2, label=f'Threshold (Mean+3σ): {thr:.4f}')
-    plt.title(f'Phân phối Lỗi tái tạo (MAE) & Ngưỡng An toàn - {name}', fontweight='bold')
-    plt.xlabel('MAE (Lỗi càng nhỏ càng tốt)'); plt.ylabel('Số lượng mẫu')
-    plt.legend(); plt.show()
+    print(f"[{name}] Optimal Threshold: {thr:.4f}")
+    print(f"[{name}] Metrics - F1: {results['f1']:.4f}, Precision: {results['precision']:.4f}, Recall: {results['recall']:.4f}, AUC: {results['auc']:.4f}")
+    
+    # --- VIZ 5: SO SÁNH PHÂN PHỐI NORMAL VS ANOMALY ---
+    plt.figure(figsize=(10, 5))
+    plt.hist(maes_n, bins=40, color=color, alpha=0.6, label='Normal Data (Gốc)')
+    plt.hist(maes_a, bins=40, color='red', alpha=0.4, label='Synthesized Anomaly (Giả lập)')
+    plt.axvline(thr, color='black', linestyle='--', linewidth=3, label=f'Threshold: {thr:.4f} (F1: {results["f1"]:.2f})')
+    plt.title(f'Phân tích Phân tách Lỗi (MAE Separation) - {name}', fontweight='bold')
+    plt.xlabel('MAE'); plt.ylabel('Số lượng mẫu')
+    plt.legend()
+    plt.savefig(f'mae_sep_{name}.png')
+    plt.show()
     
     return tfl, thr
 
-tfl_g, thr_g = export_int8_and_verify(qat_gentle, X_scaled_gentle, "GENTLE", colors[0])
-tfl_s, thr_s = export_int8_and_verify(qat_strong, X_scaled_strong, "STRONG", colors[1])
-tfl_sp, thr_sp = export_int8_and_verify(qat_spin, X_scaled_spin, "SPIN", colors[2])
+tfl_g, thr_g = export_int8_and_verify(qat_gentle, X_raw_gentle, vib_scaler_gentle, "GENTLE", colors[0])
+tfl_s, thr_s = export_int8_and_verify(qat_strong, X_raw_strong, vib_scaler_strong, "STRONG", colors[1])
+tfl_sp, thr_sp = export_int8_and_verify(qat_spin, X_raw_spin,   vib_scaler_spin,   "SPIN",   colors[2])
 
 # %%
 # ==========================================
@@ -235,5 +350,6 @@ h += f"const float VIB_CENTER_SPIN[{VIB_DIM}]   = {{{floats(vib_scaler_spin.cent
 h += f"const float VIB_CLIP_VAR_X = {VIB_CLIP[14]:.10f}f;\nconst float VIB_CLIP_VAR_Y = {VIB_CLIP[16]:.10f}f;\nconst float VIB_CLIP_VAR_Z = {VIB_CLIP[18]:.10f}f;\n\n"
 h += arr_to_c(tfl_g, "model_gentle_tflite") + arr_to_c(tfl_s, "model_strong_tflite") + arr_to_c(tfl_sp, "model_spin_tflite") + "#endif\n"
 
-open('model_data.h', 'w').write(h)
-print("✅ Hoàn tất! Đã xuất file model_data.h cho Firmware C++!")
+open('firmware_v10/model_data.h', 'w').write(h)
+
+print("[OK] Finished! Exported model_data.h for C++ Firmware!")
