@@ -407,7 +407,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
           _phaseMaeSum[resolvedMode] = (_phaseMaeSum[resolvedMode] ?? 0.0) + mae;
         }
 
-        if (_uptimeSegs.length > 1000) _uptimeSegs.removeAt(0);
+        if (_uptimeSegs.length > 500) _uptimeSegs.removeAt(0);
       });
     } catch (e) {
       debugPrint('❌ JSON parse: $e');
@@ -1011,8 +1011,8 @@ class _StatsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final segs = uptimeSegs.length > 1000
-        ? uptimeSegs.sublist(uptimeSegs.length - 1000)
+    final segs = uptimeSegs.length > 500
+        ? uptimeSegs.sublist(uptimeSegs.length - 500)
         : uptimeSegs;
 
     return ListView(
@@ -1076,7 +1076,7 @@ class _StatsTab extends StatelessWidget {
 
         const SizedBox(height: 20),
 
-        // Uptime bar — 1000 phân đoạn, 10 dòng (100/dòng)
+        // Uptime bar — 500 phân đoạn, 10 dòng (50/dòng)
         _SectionHeader(title: 'Trạng thái theo thời gian (${segs.length} phân đoạn)'),
         const SizedBox(height: 10),
         Container(
@@ -1090,8 +1090,8 @@ class _StatsTab extends StatelessWidget {
               ? const SizedBox(height: 36)
               : Column(
                   children: List.generate(10, (row) {
-                    final start = row * 100;
-                    final end = (start + 100).clamp(0, segs.length);
+                    final start = row * 50;
+                    final end = (start + 50).clamp(0, segs.length);
                     if (start >= segs.length) {
                       return const SizedBox.shrink();
                     }

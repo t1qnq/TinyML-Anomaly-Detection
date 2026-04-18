@@ -635,17 +635,12 @@ void mqtt_smart_publish() {
     bool     changed   = (cur_state != mqtt_last_state);
     bool     should_send = false;
 
-    if (changed) {
-        // Mọi chuyển trạng thái → gửi ngay
+    if (changed || (now - mqtt_last_send >= 1000UL)) {
         should_send = true;
-        const char* names[] = {"OK", "HIGH", "ALARM"};
-        Serial.printf("[MQTT] Edge: %s → %s\n", names[mqtt_last_state], names[cur_state]);
-    } else if (cur_state == 2) {
-        // ALARM → gửi liên tục mỗi chu kỳ
-        should_send = true;
-    } else if (cur_state == 0 && now - mqtt_last_send >= MQTT_HEARTBEAT_SEC * 1000UL) {
-        // OK → heartbeat mỗi 30s
-        should_send = true;
+        if (changed) {
+            const char* names[] = {"OK", "HIGH", "ALARM"};
+            Serial.printf("[MQTT] Edge: %s → %s\n", names[mqtt_last_state], names[cur_state]);
+        }
     }
     // HIGH không thay đổi → KHÔNG gửi (chỉ gửi gói đầu tiên ở trên)
 
