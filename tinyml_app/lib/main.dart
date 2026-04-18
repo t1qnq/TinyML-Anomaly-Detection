@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mqtt_client/mqtt_client.dart';
-import 'package:mqtt_client/mqtt_server_client.dart';
+import 'mqtt_factory.dart'
+    if (dart.library.js_interop) 'mqtt_factory_web.dart'
+    as mqtt_factory;
 import 'package:intl/intl.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -17,21 +20,23 @@ const String kBroker    = 'broker.emqx.io';
 const String kTopic = 'tinyml/quang_wm_2026/status';
 const int    kPort      = 1883;
 const int    kHeartbeatTimeout = 60; // seconds
-const int    kAlarmDebounce    = 6;
+const int    kAlarmWindow      = 10;  // sliding window size
+const int    kAlarmEnterThr    = 5;   // 5/10 HIGH → ALARM
+const int    kAlarmExitThr     = 1;   // ≤1/10 HIGH (9 OK) → thoát
 const int    kMaxMaeHistory    = 40;
 const int    kMaxHistory       = 30;
 
 // MAE thresholds per mode (phải khớp firmware)
 const Map<String, double> kThresholds = {
-  'GENTLE': 0.051,
-  'STRONG': 0.095,
-  'SPIN':   0.083,
+  'GENTLE': 0.1241,
+  'STRONG': 0.0968,
+  'SPIN':   0.0672,
 };
 
 // ─────────────────────────────────────────────
 // MODELS
 // ─────────────────────────────────────────────
-enum MachineStatus { waiting, ok, alarm, deviceLost }
+enum MachineStatus { waiting, ok, high, alarm, deviceLost }
 enum WashMode { gentle, strong, spin, unknown }
 
 extension WashModeX on WashMode {
@@ -177,13 +182,13 @@ class MonitorScreen extends StatefulWidget {
   const MonitorScreen({super.key});
 
   @override
-  State<MonitorScreen> createState() => _MonitorScreenState();
+  State<MonitorScreen> createState() => _MonitorScreenStateV2();
 }
 
-class _MonitorScreenState extends State<MonitorScreen>
+class _MonitorScreenStateV2 extends State<MonitorScreen>
     with TickerProviderStateMixin {
   // MQTT
-  MqttServerClient? _client;
+  MqttClient? _client;
 
   // State
   MachineStatus _status         = MachineStatus.waiting;
@@ -193,22 +198,21 @@ class _MonitorScreenState extends State<MonitorScreen>
   int           _currentWin     = 0;
   int           _currentConsec  = 0;
 
-  // Stats
-  int    _totalWins   = 0;
-  int    _alarmCount  = 0;
+  // Stats (non-final for hot-reload resilience)
+  int _totalWins = 0;
+  int _alarmCount = 0;
   DateTime? _connectedAt;
 
-  // History
-  final List<AlarmEvent>  _events     = [];
-  final List<double>      _maeHistory = [];
-  final List<bool>        _uptimeSegs = []; // true=ok, false=alarm
+  // History 
+  List<AlarmEvent>  _events      = [];
+  List<double>      _maeHistory  = [];
+  List<WashMode>    _modeHistory = [];
+  List<int>         _uptimeSegs  = [];
 
   // Phase counters
-  final Map<WashMode, int> _phaseCount = {
-    WashMode.gentle: 0,
-    WashMode.strong: 0,
-    WashMode.spin:   0,
-  };
+  Map<WashMode, int>    _phaseCount      = { WashMode.gentle: 0, WashMode.strong: 0, WashMode.spin: 0 };
+  Map<WashMode, int>    _phaseAlarmCount = { WashMode.gentle: 0, WashMode.strong: 0, WashMode.spin: 0 };
+  Map<WashMode, double> _phaseMaeSum     = { WashMode.gentle: 0.0, WashMode.strong: 0.0, WashMode.spin: 0.0 };
 
   // Heartbeat
   Timer? _heartbeatTimer;
@@ -271,11 +275,10 @@ class _MonitorScreenState extends State<MonitorScreen>
 
   // ── MQTT ────────────────────────────────────
   Future<void> _connectMQTT() async {
-    _client = MqttServerClient(
-      kBroker,
-      'android_${DateTime.now().millisecondsSinceEpoch}',
-    );
-    _client!.port            = kPort;
+    final clientID = 'quang_wm_${DateTime.now().millisecondsSinceEpoch}';
+    
+    _client = mqtt_factory.createMqttClient(kBroker, clientID, kPort);
+
     _client!.keepAlivePeriod = 20;
     _client!.autoReconnect   = true;
 
@@ -301,8 +304,10 @@ class _MonitorScreenState extends State<MonitorScreen>
     };
 
     try {
+      debugPrint('MQTT: Connecting to $kBroker...');
       await _client!.connect();
     } catch (e) {
+      debugPrint('MQTT Error: $e');
       _client!.disconnect();
       return;
     }
@@ -340,52 +345,69 @@ class _MonitorScreenState extends State<MonitorScreen>
 
       _resetHeartbeat();
 
+      // Phân tích trạng thái: firmware gửi state = "OK", "HIGH", "ALARM"
+      final stateStr = data['state'] as String? ?? 'OK';
+      final isHigh   = stateStr == 'HIGH';
+      final resolvedMode = mode != WashMode.unknown ? mode : _mode;
+
       setState(() {
         _totalWins++;
         _currentWin    = win;
         _currentConsec = consec;
         _currentMae    = mae;
 
-        // MAE history
+        // MAE history + mode history (luôn đồng bộ 1:1)
         _maeHistory.add(mae);
-        if (_maeHistory.length > kMaxMaeHistory) _maeHistory.removeAt(0);
+        _modeHistory.add(resolvedMode);
+        if (_maeHistory.length > kMaxMaeHistory) {
+          _maeHistory.removeAt(0);
+          _modeHistory.removeAt(0);
+        }
 
         // Mode
-        if (mode != WashMode.unknown) {
-          _mode = mode;
-          _phaseCount[mode] = (_phaseCount[mode] ?? 0) + 1;
+        if (resolvedMode != WashMode.unknown) {
+           _mode = resolvedMode; 
+           _phaseCount[resolvedMode] = (_phaseCount[resolvedMode] ?? 0) + 1;
         }
 
         if (isAlarm) {
-          // Only log edge: waiting/ok → alarm
           if (_status != MachineStatus.alarm) {
             _addEvent(AlarmEvent(
               isAlarm: true, mae: mae, win: win,
               consec: consec, mode: _mode, time: DateTime.now(),
             ));
-            _alarmCount++;
             _saveToFirestore(mae, win, consec, isAlarm: true);
             showAlarmNotification(mae);
           }
           _status = MachineStatus.alarm;
-          _uptimeSegs.add(false);
+          _uptimeSegs.add(2);
+          
+          if (resolvedMode != WashMode.unknown) {
+            _phaseAlarmCount[resolvedMode] = (_phaseAlarmCount[resolvedMode] ?? 0) + 1;
+          }
+          _alarmCount++; 
+        } else if (isHigh) {
+          _status = MachineStatus.high;
+          _uptimeSegs.add(1);
         } else {
-          // Edge: alarm → ok
-          if (_status == MachineStatus.alarm) {
+          if (_status == MachineStatus.alarm || _status == MachineStatus.high) {
             _addEvent(AlarmEvent(
               isAlarm: false, mae: mae, win: win,
               consec: consec, mode: _mode, time: DateTime.now(),
             ));
-            _saveToFirestore(mae, win, consec, isAlarm: false);
+            if (_status == MachineStatus.alarm) {
+              _saveToFirestore(mae, win, consec, isAlarm: false);
+            }
           }
-          _status        = MachineStatus.ok;
-          _currentMae    = mae;
-          _currentWin    = win;
-          _currentConsec = consec;
-          _uptimeSegs.add(true);
+          _status = MachineStatus.ok;
+          _uptimeSegs.add(0);
         }
 
-        if (_uptimeSegs.length > 100) _uptimeSegs.removeAt(0);
+        if (resolvedMode != WashMode.unknown) {
+          _phaseMaeSum[resolvedMode] = (_phaseMaeSum[resolvedMode] ?? 0.0) + mae;
+        }
+
+        if (_uptimeSegs.length > 1000) _uptimeSegs.removeAt(0);
       });
     } catch (e) {
       debugPrint('❌ JSON parse: $e');
@@ -511,11 +533,13 @@ class _MonitorScreenState extends State<MonitorScreen>
   // ── BODY ────────────────────────────────────
   Widget _buildBody() {
     return switch (_tabIndex) {
-      1     => _ChartTab(maeHistory: _maeHistory, mode: _mode),
+      1     => _ChartTab(maeHistory: _maeHistory, modeHistory: _modeHistory, mode: _mode, phaseCount: _phaseCount, totalWins: _totalWins),
       2     => _StatsTab(
                 totalWins: _totalWins, alarmCount: _alarmCount,
                 connectedAt: _connectedAt, phaseCount: _phaseCount,
                 uptimeSegs: _uptimeSegs, maeHistory: _maeHistory,
+                phaseAlarmCount: _phaseAlarmCount,
+                phaseMaeSum: _phaseMaeSum,
                ),
       _     => _buildMonitorTab(),
     };
@@ -564,10 +588,11 @@ class _MonitorScreenState extends State<MonitorScreen>
   // ── STATUS RING ─────────────────────────────
   Widget _buildStatusRing() {
     final (color, icon, label) = switch (_status) {
-      MachineStatus.ok       => (const Color(0xFF22D9A0), '✓', 'OK'),
-      MachineStatus.alarm    => (const Color(0xFFFF4C6A), '⚡', 'ALARM'),
+      MachineStatus.ok         => (const Color(0xFF22D9A0), '✓', 'OK'),
+      MachineStatus.high       => (const Color(0xFFF5A623), '⚠', 'HIGH'),
+      MachineStatus.alarm      => (const Color(0xFFFF4C6A), '⚡', 'ALARM'),
       MachineStatus.deviceLost => (const Color(0xFFF5A623), '💀', 'LOST'),
-      _                      => (const Color(0xFF6B7285), '⏳', 'WAITING'),
+      _                        => (const Color(0xFF6B7285), '⏳', 'WAITING'),
     };
 
     return Center(
@@ -600,7 +625,7 @@ class _MonitorScreenState extends State<MonitorScreen>
                       color: color, letterSpacing: 3,
                       fontFamily: 'monospace',
                     )),
-                if (_status == MachineStatus.alarm)
+                if (_status == MachineStatus.alarm || _status == MachineStatus.high)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text('MAE ${_currentMae.toStringAsFixed(4)}',
@@ -693,7 +718,7 @@ class _MonitorScreenState extends State<MonitorScreen>
           _MetricCell(label: 'WINDOW', value: '#$_currentWin',
               color: const Color(0xFFF5A623)),
           const SizedBox(width: 8),
-          _MetricCell(label: 'CONSEC', value: '$_currentConsec wins',
+          _MetricCell(label: 'HIGH/10', value: '$_currentConsec/10',
               color: const Color(0xFFE8EAF0)),
         ]),
       ]),
@@ -756,40 +781,47 @@ class _MonitorScreenState extends State<MonitorScreen>
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: const Color(0xFF181D2A),
         borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: color, width: 3)),
       ),
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        leading: Container(
-          width: 38, height: 38,
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(10),
+      child: IntrinsicHeight(
+        child: Row(children: [
+          Container(width: 3, color: color),
+          Expanded(
+            child: ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              leading: Container(
+                width: 38, height: 38,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Center(child: Text(icon)),
+              ),
+              title: Text(title,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                      color: Color(0xFFE8EAF0))),
+              subtitle: Text('$timeStr · ${e.mode.label}',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7285),
+                      fontFamily: 'monospace')),
+              trailing: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(e.mae.toStringAsFixed(4),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
+                          fontFamily: 'monospace', color: color)),
+                  Text('Win #${e.win}',
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF6B7285),
+                          fontFamily: 'monospace')),
+                ],
+              ),
+            ),
           ),
-          child: Center(child: Text(icon)),
-        ),
-        title: Text(title,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
-                color: Color(0xFFE8EAF0))),
-        subtitle: Text('$timeStr · ${e.mode.label}',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7285),
-                fontFamily: 'monospace')),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(e.mae.toStringAsFixed(4),
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                    fontFamily: 'monospace', color: color)),
-            Text('Win #${e.win}',
-                style: const TextStyle(fontSize: 11, color: Color(0xFF6B7285),
-                    fontFamily: 'monospace')),
-          ],
-        ),
+        ]),
       ),
     );
   }
@@ -800,9 +832,12 @@ class _MonitorScreenState extends State<MonitorScreen>
 // ─────────────────────────────────────────────
 class _ChartTab extends StatelessWidget {
   final List<double> maeHistory;
+  final List<WashMode> modeHistory;
   final WashMode mode;
+  final Map<WashMode, int> phaseCount;
+  final int totalWins;
 
-  const _ChartTab({required this.maeHistory, required this.mode});
+  const _ChartTab({required this.maeHistory, required this.modeHistory, required this.mode, required this.phaseCount, required this.totalWins});
 
   @override
   Widget build(BuildContext context) {
@@ -844,7 +879,7 @@ class _ChartTab extends StatelessWidget {
                       style: TextStyle(color: Color(0xFF6B7285),
                           fontFamily: 'monospace', fontSize: 13)))
               : LineChart(LineChartData(
-                  minY: 0, maxY: 0.5,
+                  minY: 0, maxY: 0.35,
                   gridData: FlGridData(
                     show: true,
                     getDrawingHorizontalLine: (_) =>
@@ -888,14 +923,23 @@ class _ChartTab extends StatelessWidget {
                       ),
                       dotData: FlDotData(
                         show: true,
-                        getDotPainter: (spot, _, __, ___) =>
-                            FlDotCirclePainter(
-                          radius: 3,
-                          color: spot.y > thr
-                              ? const Color(0xFFFF4C6A)
-                              : const Color(0xFF4A9EFF),
-                          strokeWidth: 0,
-                        ),
+                        getDotPainter: (spot, _, __, ___) {
+                          final idx = spot.x.toInt();
+                          // Lấy màu theo mode tại điểm đó
+                          final dotMode = (idx >= 0 && idx < modeHistory.length)
+                              ? modeHistory[idx]
+                              : mode;
+                          // Nếu vượt ngưỡng pha hiện tại → đỏ, ngược lại → màu pha
+                          final dotThr = kThresholds[dotMode.label] ?? 0.15;
+                          final dotColor = spot.y > dotThr
+                              ? const Color(0xFFFF4C6A)  // vượt ngưỡng → đỏ
+                              : dotMode.color;           // bình thường → màu pha
+                          return FlDotCirclePainter(
+                            radius: 3,
+                            color: dotColor,
+                            strokeWidth: 0,
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -905,18 +949,13 @@ class _ChartTab extends StatelessWidget {
         const SizedBox(height: 24),
         _SectionHeader(title: 'Phân phối MAE theo pha'),
         const SizedBox(height: 12),
-        // (Additional phase bar chart can be added here if fl_chart bar is available)
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: const Color(0xFF111520),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0x12FFFFFF)),
-          ),
-          child: const Text('Xem tab Thống kê để biết phân bổ theo pha.',
-              style: TextStyle(fontSize: 13, color: Color(0xFF6B7285),
-                  fontFamily: 'monospace')),
-        ),
+        ...WashMode.values
+            .where((m) => m != WashMode.unknown)
+            .map((m) => _PhaseBar(
+                  mode: m,
+                  count: phaseCount[m] ?? 0,
+                  total: totalWins,
+                )),
       ],
     );
   }
@@ -929,14 +968,17 @@ class _StatsTab extends StatelessWidget {
   final int totalWins;
   final int alarmCount;
   final DateTime? connectedAt;
-  final Map<WashMode, int> phaseCount;
-  final List<bool> uptimeSegs;
+  final Map<WashMode, int>? phaseCount;
+  final Map<WashMode, int>? phaseAlarmCount;
+  final Map<WashMode, double>? phaseMaeSum;
+  final List<int> uptimeSegs;
   final List<double> maeHistory;
 
   const _StatsTab({
     required this.totalWins, required this.alarmCount,
     required this.connectedAt, required this.phaseCount,
     required this.uptimeSegs, required this.maeHistory,
+    required this.phaseAlarmCount, required this.phaseMaeSum,
   });
 
   String get _uptime {
@@ -946,52 +988,96 @@ class _StatsTab extends StatelessWidget {
     return '${m}m ${s}s';
   }
 
-  double get _avgMae {
-    if (maeHistory.isEmpty) return 0;
-    return maeHistory.reduce((a, b) => a + b) / maeHistory.length;
+  String _calcAvgMae(WashMode mode) {
+    if (phaseCount == null || phaseMaeSum == null) return '—';
+    final count = phaseCount![mode] ?? 0;
+    if (count == 0) return '—';
+    final sum = phaseMaeSum![mode] ?? 0.0;
+    return (sum / count).toStringAsFixed(4);
   }
 
-  String get _alarmRate {
+  String _calcAlarmRate(WashMode mode) {
+    if (phaseCount == null || phaseAlarmCount == null) return '0.0%';
+    final count = phaseCount![mode] ?? 0;
+    if (count == 0) return '0.0%';
+    final alarms = phaseAlarmCount![mode] ?? 0;
+    return '${(alarms / count * 100).toStringAsFixed(1)}%';
+  }
+
+  String get _globalAlarmRate {
     if (totalWins == 0) return '0.0%';
     return '${(alarmCount / totalWins * 100).toStringAsFixed(1)}%';
   }
 
   @override
   Widget build(BuildContext context) {
-    final segs = uptimeSegs.length > 24
-        ? uptimeSegs.sublist(uptimeSegs.length - 24)
+    final segs = uptimeSegs.length > 1000
+        ? uptimeSegs.sublist(uptimeSegs.length - 1000)
         : uptimeSegs;
 
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
         // Stat cards grid
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisSpacing: 10, mainAxisSpacing: 10,
-          childAspectRatio: 1.6,
-          children: [
-            _StatCard(label: 'Tổng windows', value: '$totalWins',
-                sub: 'inference cycles', color: const Color(0xFF4A9EFF)),
-            _StatCard(label: 'Alarm events', value: '$alarmCount',
-                sub: 'tỉ lệ: $_alarmRate', color: const Color(0xFFFF4C6A)),
-            _StatCard(label: 'MAE trung bình',
-                value: maeHistory.isEmpty ? '—' : _avgMae.toStringAsFixed(4),
-                sub: 'tất cả pha', color: const Color(0xFFF5A623)),
-            _StatCard(label: 'Uptime', value: _uptime,
-                sub: connectedAt != null
-                    ? 'kể từ ${DateFormat('HH:mm').format(connectedAt!)}'
-                    : 'chưa kết nối',
-                color: const Color(0xFF22D9A0)),
-          ],
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _StatCard(label: 'Tổng windows', value: '$totalWins',
+                  sub: 'inference cycles', color: const Color(0xFF4A9EFF))),
+              const SizedBox(width: 10),
+              Expanded(child: _StatCard(
+                  label: 'Số windows bị alarm', 
+                  value: '$alarmCount',
+                  sub: 'tỉ lệ: $_globalAlarmRate', 
+                  color: const Color(0xFFFF4C6A),
+                  extra: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 8),
+                      _MiniRow(label: 'GENTLE', value: _calcAlarmRate(WashMode.gentle), color: WashMode.gentle.color),
+                      _MiniRow(label: 'STRONG', value: _calcAlarmRate(WashMode.strong), color: WashMode.strong.color),
+                      _MiniRow(label: 'SPIN', value: _calcAlarmRate(WashMode.spin), color: WashMode.spin.color),
+                    ],
+                  ),
+              )),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _StatCard(
+                  label: 'MAE trung bình',
+                  value: '',
+                  sub: 'theo từng pha', 
+                  color: const Color(0xFFF5A623),
+                  extra: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      _MiniRow(label: 'GENTLE', value: _calcAvgMae(WashMode.gentle), color: WashMode.gentle.color),
+                      _MiniRow(label: 'STRONG', value: _calcAvgMae(WashMode.strong), color: WashMode.strong.color),
+                      _MiniRow(label: 'SPIN', value: _calcAvgMae(WashMode.spin), color: WashMode.spin.color),
+                    ],
+                  ),
+              )),
+              const SizedBox(width: 10),
+              Expanded(child: _StatCard(label: 'Uptime', value: _uptime,
+                  sub: connectedAt != null
+                      ? 'kể từ ${DateFormat('HH:mm').format(connectedAt!)}'
+                      : 'chưa kết nối',
+                  color: const Color(0xFF22D9A0))),
+            ],
+          ),
         ),
 
         const SizedBox(height: 20),
 
-        // Uptime bar
-        _SectionHeader(title: 'Trạng thái theo thời gian (24 phân đoạn)'),
+        // Uptime bar — 1000 phân đoạn, 10 dòng (100/dòng)
+        _SectionHeader(title: 'Trạng thái theo thời gian (${segs.length} phân đoạn)'),
         const SizedBox(height: 10),
         Container(
           padding: const EdgeInsets.all(14),
@@ -1000,36 +1086,65 @@ class _StatsTab extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: const Color(0x12FFFFFF)),
           ),
-          child: Row(
-            children: segs.isEmpty
-                ? [const Expanded(child: SizedBox(height: 8))]
-                : segs.map((ok) => Expanded(
-                      child: Container(
-                        height: 8, margin: const EdgeInsets.symmetric(horizontal: 1),
-                        decoration: BoxDecoration(
-                          color: ok
-                              ? const Color(0xFF22D9A0)
-                              : const Color(0xFFFF4C6A),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
+          child: segs.isEmpty
+              ? const SizedBox(height: 36)
+              : Column(
+                  children: List.generate(10, (row) {
+                    final start = row * 100;
+                    final end = (start + 100).clamp(0, segs.length);
+                    if (start >= segs.length) {
+                      return const SizedBox.shrink();
+                    }
+                    final rowSegs = segs.sublist(start, end);
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: row < 9 ? 2 : 0),
+                      child: Row(
+                        children: rowSegs.map((s) {
+                          final c = switch (s) {
+                            0 => const Color(0xFF22D9A0),  // OK = xanh
+                            1 => const Color(0xFFF5A623),  // HIGH = cam
+                            _ => const Color(0xFFFF4C6A),  // ALARM = đỏ
+                          };
+                          return Expanded(
+                            child: Container(
+                              height: 4, margin: const EdgeInsets.symmetric(horizontal: 0.25),
+                              decoration: BoxDecoration(
+                                color: c,
+                                borderRadius: BorderRadius.circular(1),
+                              ),
+                            ),
+                          );
+                        }).toList(),
                       ),
-                    )).toList(),
-          ),
+                    );
+                  }),
+                ),
         ),
 
         const SizedBox(height: 20),
 
-        // Phase breakdown
-        _SectionHeader(title: 'Phân bổ theo pha'),
-        const SizedBox(height: 10),
-        ...WashMode.values
-            .where((m) => m != WashMode.unknown)
-            .map((m) => _PhaseBar(
-                  mode: m,
-                  count: phaseCount[m] ?? 0,
-                  total: totalWins,
-                )),
+
+        
+        // Technical Indicators
+        _SectionHeader(title: 'Thông số kỹ thuật (V11)'),
+        const SizedBox(height: 12),
+        _buildTechInfo(label: 'Kiến trúc', value: 'Symmetric Autoencoder'),
+        _buildTechInfo(label: 'Cấu trúc', value: '19-128-64-32-64-128-19'),
+        _buildTechInfo(label: 'Tổng tham số', value: '25,779 parameters'),
+        _buildTechInfo(label: 'Tối ưu hóa', value: 'INT8 QAT (Quantization)'),
+        _buildTechInfo(label: 'Flash/RAM', value: '~95KB / ~120KB'),
       ],
+    );
+  }
+
+  Widget _buildTechInfo({required String label, required String value}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(children: [
+        Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7285), fontFamily: 'monospace')),
+        const Spacer(),
+        Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFE8EAF0), fontFamily: 'monospace')),
+      ]),
     );
   }
 }
@@ -1149,13 +1264,9 @@ class _PhaseCell extends StatelessWidget {
         decoration: BoxDecoration(
           color: isActive ? mode.color.withOpacity(0.1) : const Color(0xFF181D2A),
           borderRadius: BorderRadius.circular(10),
-          border: Border(
-            top: isActive
-                ? BorderSide(color: mode.color, width: 2)
-                : BorderSide.none,
-            left: BorderSide(color: const Color(0x12FFFFFF)),
-            right: BorderSide(color: const Color(0x12FFFFFF)),
-            bottom: BorderSide(color: const Color(0x12FFFFFF)),
+          border: Border.all(
+            color: isActive ? mode.color : const Color(0x12FFFFFF),
+            width: isActive ? 2 : 1,
           ),
         ),
         child: Column(children: [
@@ -1179,13 +1290,14 @@ class _PhaseCell extends StatelessWidget {
 class _StatCard extends StatelessWidget {
   final String label, value, sub;
   final Color color;
+  final Widget? extra;
   const _StatCard({required this.label, required this.value,
-      required this.sub, required this.color});
+      required this.sub, required this.color, this.extra});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF181D2A),
         borderRadius: BorderRadius.circular(12),
@@ -1193,16 +1305,40 @@ class _StatCard extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(label.toUpperCase(),
-            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7285),
+            style: const TextStyle(fontSize: 9, color: Color(0xFF6B7285),
                 fontFamily: 'monospace', letterSpacing: 1)),
-        const SizedBox(height: 6),
-        Text(value,
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800,
-                fontFamily: 'monospace', color: color)),
+        const SizedBox(height: 4),
+        if (value.isNotEmpty)
+          Text(value,
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
+                  fontFamily: 'monospace', color: color)),
         Text(sub,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7285),
+            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7285),
                 fontFamily: 'monospace')),
+        if (extra != null) extra!,
       ]),
+    );
+  }
+}
+
+class _MiniRow extends StatelessWidget {
+  final String label, value;
+  final Color color;
+  const _MiniRow({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Row(
+        children: [
+          Container(width: 4, height: 4, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 6),
+          Text(label, style: const TextStyle(fontSize: 9, color: Color(0xFF6B7285), fontFamily: 'monospace')),
+          const Spacer(),
+          Text(value, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color, fontFamily: 'monospace')),
+        ],
+      ),
     );
   }
 }

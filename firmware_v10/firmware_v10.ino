@@ -166,7 +166,26 @@ static uint32_t strong_wins  = 0;
 static uint32_t spin_wins    = 0;
 static uint32_t consec_alarm = 0;
 
-#define ALARM_DEBOUNCE  6
+// ── Sliding Window Alarm ──
+// Vào ALARM: 5/10 win gần nhất là HIGH
+// Thoát ALARM: 9/10 win gần nhất là OK
+#define ALARM_WINDOW     10
+#define ALARM_ENTER_THR   5   // >= 5 HIGH → vào ALARM
+#define ALARM_EXIT_THR    1   // <= 1 HIGH (tức 9 OK) → thoát ALARM
+
+// ── MQTT Smart Publish ──
+// Cấu trúc chia sẻ giữa ai_task → mqtt_task (lock-free via queue)
+struct MqttPayload {
+    float   mae;
+    uint32_t win;
+    uint32_t consec;
+    bool    is_alarm;
+    bool    over_thr;
+    char    mode[8];    // "GENTLE", "STRONG", "SPIN"
+};
+static QueueHandle_t mqtt_queue = nullptr;  // MqttPayload
+
+#define MQTT_HEARTBEAT_SEC  30  // Gửi heartbeat mỗi 30s khi bình thường
 
 static const float FEAT_WEIGHTS[FEAT_DIM] = {
     1,1,1,1,1,1,1,1,1,1,1,1,1,   // mel
@@ -535,27 +554,51 @@ void ai_task(void*) {
             Serial.println();
         }
 
+        // ── Sliding Window Alarm Logic ──
+        // Đẩy kết quả vào ring buffer
+        static bool win_ring[ALARM_WINDOW] = {false};
+        static int  win_idx = 0;
+        static bool in_alarm_state = false;
+
+        win_ring[win_idx] = over_thr;
+        win_idx = (win_idx + 1) % ALARM_WINDOW;
+
+        // Đếm số HIGH trong 10 win gần nhất
+        int high_count = 0;
+        for (int i = 0; i < ALARM_WINDOW; i++) {
+            if (win_ring[i]) high_count++;
+        }
+
+        // Hysteresis: bất đối xứng vào/ra
+        if (!in_alarm_state && high_count >= ALARM_ENTER_THR) {
+            in_alarm_state = true;   // Vào ALARM
+        } else if (in_alarm_state && high_count <= (ALARM_WINDOW - 9)) {
+            in_alarm_state = false;  // Thoát ALARM (9/10 OK)
+        }
+
+        bool alarm = in_alarm_state;
         if (over_thr) consec_alarm++; else consec_alarm = 0;
-        bool alarm = (consec_alarm >= ALARM_DEBOUNCE);
         if (over_thr && consec_alarm == 1) alarm_wins++;
 
-        // --- BẮN MQTT KHI CÓ SỰ CHUYỂN ĐỔI (EDGE-TRIGGERED) ---
-        if (alarm != last_alarm_state) {
-            if (mqttClient.connected()) {
-                StaticJsonDocument<200> doc;
-                
-                doc["state"] = alarm ? "ALARM" : "OK"; 
-                doc["mae"] = mae_int8;
-                doc["is_alarm"] = alarm;
-                doc["win"] = total_wins;      // THÊM: Gửi win thứ bao nhiêu
-                doc["consec"] = consec_alarm; // THÊM: Gửi số win liên tục
+        // --- SMART MQTT: Đẩy payload vào queue (non-blocking, ~0µs) ---
+        // Quyết định có gửi hay không do mqtt_task xử lý
+        MqttPayload payload;
+        payload.mae      = mae_int8;
+        payload.win      = total_wins;
+        payload.consec   = high_count;  // Số HIGH trong 10 win gần nhất
+        payload.is_alarm = alarm;
+        payload.over_thr = over_thr;
+        strncpy(payload.mode, mode_str, sizeof(payload.mode));
+        
+        // Ghi đè nếu mqtt_task chưa kịp tiêu thụ (không bao giờ block)
+        if (xQueueSend(mqtt_queue, &payload, 0) != pdTRUE) {
+            MqttPayload dummy;
+            xQueueReceive(mqtt_queue, &dummy, 0);
+            xQueueSend(mqtt_queue, &payload, 0);
+        }
 
-                char jsonBuffer[256];
-                serializeJson(doc, jsonBuffer);
-                mqttClient.publish("tinyml/washing_machine/status", jsonBuffer);
-                
-                Serial.printf("[MQTT] >>> ĐÃ GỬI SỰ KIỆN: %s <<<\n", alarm ? "ALARM" : "OK");
-            }
+        if (alarm != last_alarm_state) {
+            Serial.printf("[MQTT] >>> TRẠNG THÁI THAY ĐỔI: %s <<<\n", alarm ? "ALARM" : "OK");
             last_alarm_state = alarm;
         }
 
@@ -569,7 +612,63 @@ void ai_task(void*) {
 }
 
 // ============================================================
-// SECTION 10: SETUP & LOOP
+// SECTION 10: MQTT TASK — Chạy trên loop(), tách khỏi AI
+// Chiến lược gửi:
+//   1. Heartbeat mỗi 30s khi OK (giữ App không LOST)
+//   2. HIGH: gửi 1 gói ĐẦU TIÊN khi vào HIGH, 1 gói khi thoát HIGH
+//   3. ALARM: gửi LIÊN TỤC (~1Hz) suốt quá trình alarm
+//   4. Mọi chuyển trạng thái (OK↔HIGH↔ALARM): gửi NGAY LẬP TỨC
+//   5. KHÔNG BAO GIỜ block luồng suy luận
+// ============================================================
+// 3 trạng thái: 0=OK, 1=HIGH, 2=ALARM
+static uint8_t  mqtt_last_state = 0;
+static uint32_t mqtt_last_send  = 0;
+
+void mqtt_smart_publish() {
+    MqttPayload p;
+    if (xQueueReceive(mqtt_queue, &p, 0) != pdTRUE) return;
+    if (!mqttClient.connected()) return;
+
+    // Phân loại trạng thái hiện tại
+    uint32_t now       = millis();
+    uint8_t  cur_state = p.is_alarm ? 2 : (p.over_thr ? 1 : 0);
+    bool     changed   = (cur_state != mqtt_last_state);
+    bool     should_send = false;
+
+    if (changed) {
+        // Mọi chuyển trạng thái → gửi ngay
+        should_send = true;
+        const char* names[] = {"OK", "HIGH", "ALARM"};
+        Serial.printf("[MQTT] Edge: %s → %s\n", names[mqtt_last_state], names[cur_state]);
+    } else if (cur_state == 2) {
+        // ALARM → gửi liên tục mỗi chu kỳ
+        should_send = true;
+    } else if (cur_state == 0 && now - mqtt_last_send >= MQTT_HEARTBEAT_SEC * 1000UL) {
+        // OK → heartbeat mỗi 30s
+        should_send = true;
+    }
+    // HIGH không thay đổi → KHÔNG gửi (chỉ gửi gói đầu tiên ở trên)
+
+    if (!should_send) return;
+
+    StaticJsonDocument<256> doc;
+    doc["state"]    = p.is_alarm ? "ALARM" : (p.over_thr ? "HIGH" : "OK");
+    doc["mae"]      = p.mae;
+    doc["is_alarm"] = p.is_alarm;
+    doc["win"]      = p.win;
+    doc["consec"]   = p.consec;
+    doc["mode"]     = p.mode;
+
+    char buf[256];
+    serializeJson(doc, buf);
+    mqttClient.publish("tinyml/quang_wm_2026/status", buf);
+
+    mqtt_last_state = cur_state;
+    mqtt_last_send  = now;
+}
+
+// ============================================================
+// SECTION 11: SETUP & LOOP
 // ============================================================
 void setup() {
     Serial.begin(921600);
@@ -614,8 +713,9 @@ void setup() {
     sync_events = xEventGroupCreate();
     audio_queue = xQueueCreate(2, sizeof(float) * MEL_DIM);
     vib_queue   = xQueueCreate(2, sizeof(float) * VIB_DIM);
+    mqtt_queue  = xQueueCreate(2, sizeof(MqttPayload));
 
-    if (!model_mutex || !sync_events || !audio_queue || !vib_queue) {
+    if (!model_mutex || !sync_events || !audio_queue || !vib_queue || !mqtt_queue) {
         Serial.println("[ERROR] RTOS object create fail"); while (1) vTaskDelay(1000);
     }
 
@@ -634,7 +734,9 @@ void setup() {
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
         reconnect_mqtt();
-        mqttClient.loop(); // Lắng nghe và giữ kết nối MQTT
+        mqttClient.loop();
     }
+    // Smart publish: xử lý MQTT tách biệt khỏi AI
+    mqtt_smart_publish();
     vTaskDelay(pdMS_TO_TICKS(50));
 }
