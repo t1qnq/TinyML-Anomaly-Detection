@@ -16,9 +16,9 @@ import 'package:fl_chart/fl_chart.dart';
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const String kBroker    = 'broker.emqx.io';
+const String kBroker    = '0a6070814ed640d2bf2200eb24c6b80e.s1.eu.hivemq.cloud';
 const String kTopic = 'tinyml/quang_wm_2026/status';
-const int    kPort      = 1883;
+const int    kPort      = 8883;
 const int    kHeartbeatTimeout = 60; // seconds
 const int    kAlarmWindow      = 10;  // sliding window size
 const int    kAlarmEnterThr    = 5;   // 5/10 HIGH → ALARM
@@ -279,6 +279,8 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     
     _client = mqtt_factory.createMqttClient(kBroker, clientID, kPort);
 
+    _client!.logging(on: true); 
+    _client!.setProtocolV311(); // CHÚ Ý: Bắt buộc ép chạy chuẩn 3.1.1 với HiveMQ
     _client!.keepAlivePeriod = 20;
     _client!.autoReconnect   = true;
 
@@ -302,6 +304,12 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
         _status        = MachineStatus.waiting;
       });
     };
+
+    final connMess = MqttConnectMessage()
+        .withClientIdentifier(clientID)
+        .authenticateAs('project1', 'Abcd2705@') // Authenticate với HiveMQ Cloud
+        .startClean();
+    _client!.connectionMessage = connMess;
 
     try {
       debugPrint('MQTT: Connecting to $kBroker...');

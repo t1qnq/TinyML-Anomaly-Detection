@@ -14,6 +14,7 @@
 
 #include <Wire.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include "driver/i2s.h"
 #include "esp_dsp.h"
 #include "freertos/event_groups.h"
@@ -100,15 +101,22 @@ static void mel_power(const float* fft, float* out) {
 
 const char* ssid = "Coin";
 const char* password = "01152718";
-const char* mqtt_server = "broker.emqx.io";
+const char* mqtt_server = "0a6070814ed640d2bf2200eb24c6b80e.s1.eu.hivemq.cloud"; // TODO: Đổi thành URL của bạn
+const int mqtt_port = 8883;
+const char* mqtt_user = "project1";              // TODO: Đổi thành Username của bạn
+const char* mqtt_pass = "Abcd2705@";              // TODO: Đổi thành Password của bạn
 
-WiFiClient espClient;
+WiFiClientSecure espClient; // Bắt buộc dùng WiFiClientSecure cho port 8883
 PubSubClient mqttClient(espClient);
 
 void reconnect_mqtt() {
     if (!mqttClient.connected()) {
-        if (mqttClient.connect("ESP32_WashingMachine")) {
-            Serial.println("[MQTT] Connected");
+        Serial.print("[MQTT] Connecting to HiveMQ Cloud...");
+        if (mqttClient.connect("ESP32_WashingMachine", mqtt_user, mqtt_pass)) {
+            Serial.println("OK");
+        } else {
+            Serial.print("Failed, rc=");
+            Serial.println(mqttClient.state());
         }
     }
 }
@@ -678,7 +686,10 @@ void setup() {
     while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
     Serial.println("\n[WIFI] Connected");
     
-    mqttClient.setServer(mqtt_server, 1883);
+    // Bỏ qua kiểm tra chứng chỉ SSL/TLS (giúp code gọn, không cần nạp cứng Root CA)
+    espClient.setInsecure();
+    
+    mqttClient.setServer(mqtt_server, mqtt_port);
 
     tensor_arena_gentle = (uint8_t*)heap_caps_aligned_alloc(16, TENSOR_ARENA_SIZE, MALLOC_CAP_SPIRAM);
     tensor_arena_strong = (uint8_t*)heap_caps_aligned_alloc(16, TENSOR_ARENA_SIZE, MALLOC_CAP_SPIRAM);
