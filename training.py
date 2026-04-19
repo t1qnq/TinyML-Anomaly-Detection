@@ -9,6 +9,8 @@
 # ==========================================
 import os
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
+import matplotlib
+matplotlib.use('Agg')
 
 import numpy as np
 import pandas as pd
@@ -17,7 +19,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
 from tensorflow.keras import layers, models
-import tensorflow_model_optimization as tfmot
+# import tensorflow_model_optimization as tfmot
 from sklearn.preprocessing import RobustScaler
 import warnings
 warnings.filterwarnings('ignore')
@@ -77,7 +79,7 @@ for bar in bars:
     yval = bar.get_height()
     plt.text(bar.get_x() + bar.get_width()/2, yval + 10, f'{int(yval)}', ha='center', va='bottom', fontweight='bold')
 plt.savefig('data_imbalance.png')
-plt.show()
+    # plt.show()
 
 # %%
 # ==========================================
@@ -141,63 +143,75 @@ def weighted_mae(y_true, y_pred):
 def build_model():
     return models.Sequential([
         layers.InputLayer(input_shape=(FEAT_DIM,)),
-        layers.Dense(128, activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
-        layers.Dense(64,  activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
-        layers.Dense(128, activation='sigmoid'), layers.Dense(FEAT_DIM, activation='sigmoid')
+        layers.Reshape((FEAT_DIM, 1)),
+        
+        # ENCODER
+        layers.Conv1D(16, kernel_size=3, padding='same', activation='relu'), 
+        layers.MaxPooling1D(pool_size=2, padding='same'),
+        layers.Conv1D(8, kernel_size=3, padding='same', activation='relu'),  
+        layers.MaxPooling1D(pool_size=2, padding='same'),
+        
+        # BOTTLENECK
+        layers.Flatten(),
+        layers.Dense(8, activation='sigmoid'),
+
+        # DECODER
+        layers.Dense(40, activation='relu'),
+        layers.Reshape((5, 8)),
+        layers.UpSampling1D(size=2),                                     
+        layers.Conv1D(16, kernel_size=3, padding='same', activation='relu'),
+        layers.UpSampling1D(size=2),                                     
+        layers.Conv1D(1, kernel_size=3, padding='same', activation='sigmoid'), 
+        
+        layers.Cropping1D(cropping=(0, 1)),
+        layers.Flatten()
     ])
 
-def plot_training_history(hist_float, hist_qat, name, color):
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
-    fig.suptitle(f'Lịch sử Huấn luyện - Mô hình {name}', fontweight='bold', fontsize=14)
-    
-    axes[0].plot(hist_float.history['loss'], label='Train Loss', color=color)
-    axes[0].plot(hist_float.history['val_loss'], label='Val Loss', color='gray', linestyle='--')
-    axes[0].set_title('Phase 1: Float32 Pre-training')
-    axes[0].set_xlabel('Epochs'); axes[0].set_ylabel('Weighted MAE')
-    axes[0].legend()
-    
-    axes[1].plot(hist_qat.history['loss'], label='Train Loss (QAT)', color=color)
-    axes[1].plot(hist_qat.history['val_loss'], label='Val Loss (QAT)', color='gray', linestyle='--')
-    axes[1].set_title('Phase 2: INT8 Quantization-Aware Training')
-    axes[1].set_xlabel('Epochs')
-    axes[1].legend()
+def plot_training_history(hist_float, name, color):
+    plt.figure(figsize=(8, 4))
+    plt.plot(hist_float.history['loss'], label='Train Loss', color=color)
+    plt.plot(hist_float.history['val_loss'], label='Val Loss', color='gray', linestyle='--')
+    plt.title(f'Lịch sử Huấn luyện - {name} (Float32)', fontweight='bold')
+    plt.xlabel('Epochs'); plt.ylabel('Weighted MAE')
+    plt.legend()
     plt.tight_layout()
     plt.savefig(f'history_{name}.png')
-    plt.show()
+    # plt.show()
 
 def train_pipeline(X_raw_subset, vib_scaler, name, color):
     print(f"\n>>> Training: {name} (Original: {len(X_raw_subset)} samples)")
     
     # 1. Thực hiện Data Augmentation trên RAW data
-    # Tăng bia mẫu cho GENTLE để học kỹ hơn
     target = 20000 if name == "GENTLE" else 10000
+    print(f"--- Augmenting to {target} samples...")
     X_aug_raw = augment_raw_data(X_raw_subset, target_size=target)
     
-    # 2. Scale dữ liệu đã Augment để đưa vào huấn luyện
+    # 2. Scale dữ liệu đã Augment
+    print("--- Scaling data...")
     X_clean_aug = scale_subset(X_aug_raw, vib_scaler)
     
-    # 3. Tạo dữ liệu đầu vào có nhiễu (Denoising Autoencoder approach)
-    # Lưu ý: scale_subset đã nén dữ liệu về [0, 1]. Ta cộng nhiễu nhỏ để model robust hơn.
+    # 3. Tạo dữ liệu đầu vào có nhiễu
+    print("--- Adding noise...")
     noise = np.random.normal(0, 0.02, X_clean_aug.shape).astype(np.float32)
     X_noisy_aug = np.clip(X_clean_aug + noise, 0, 1)
 
+    # 4. Training Phase (Float32)
     bs = 64
+    print("--- Building model...")
     m = build_model()
+    print("--- Compiling model...")
     m.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss=weighted_mae)
-    hist_float = m.fit(X_noisy_aug, X_clean_aug, epochs=200, batch_size=bs, validation_split=0.15, verbose=0,
-          callbacks=[tf.keras.callbacks.EarlyStopping(patience=20, restore_best_weights=True)])
+    print("--- Starting Training (Float32)...")
+    # Tăng epoch lên 300 cho PTQ ổn định hơn
+    hist_float = m.fit(X_noisy_aug, X_clean_aug, epochs=300, batch_size=bs, validation_split=0.15, verbose=1,
+          callbacks=[tf.keras.callbacks.EarlyStopping(patience=30, restore_best_weights=True)])
     
-    qat_m = tfmot.quantization.keras.quantize_model(m)
-    qat_m.compile(optimizer=tf.keras.optimizers.Adam(1e-4), loss=weighted_mae)
-    hist_qat = qat_m.fit(X_noisy_aug, X_clean_aug, epochs=80, batch_size=bs, validation_split=0.15, verbose=0,
-              callbacks=[tf.keras.callbacks.EarlyStopping(patience=15, restore_best_weights=True)])
-    
-    plot_training_history(hist_float, hist_qat, name, color)
-    return qat_m
+    plot_training_history(hist_float, name, color)
+    return m
 
-qat_gentle = train_pipeline(X_raw_gentle, vib_scaler_gentle, "GENTLE", colors[0])
-qat_strong = train_pipeline(X_raw_strong, vib_scaler_strong, "STRONG", colors[1])
-qat_spin   = train_pipeline(X_raw_spin,   vib_scaler_spin,   "SPIN",   colors[2])
+model_gentle = train_pipeline(X_raw_gentle, vib_scaler_gentle, "GENTLE", colors[0])
+model_strong = train_pipeline(X_raw_strong, vib_scaler_strong, "STRONG", colors[1])
+model_spin   = train_pipeline(X_raw_spin,   vib_scaler_spin,   "SPIN",   colors[2])
 
 # %%
 # ==========================================
@@ -271,21 +285,28 @@ def calculate_optimal_threshold(maes_normal, maes_anomaly, name=""):
     }
     return results
 
-def export_int8_and_verify(qat_m, X_raw_subset, vib_scaler, name, color):
+def export_int8_and_verify(float_m, X_raw_subset, vib_scaler, name, color):
     # 1. Chuẩn bị dữ liệu Scaling
     X_scaled_normal = scale_subset(X_raw_subset, vib_scaler)
     X_raw_anom = synthesize_anomalies(X_raw_subset, name=name)
     X_scaled_anom = scale_subset(X_raw_anom, vib_scaler)
     
-    # 2. Convert to TFLite INT8
+    # 2. Post-Training Quantization (PTQ) - Full Integer Quantization
     def rep_gen():
-        for i in range(min(100, len(X_scaled_normal))): yield [X_scaled_normal[i:i+1].astype(np.float32)]
-    conv = tf.lite.TFLiteConverter.from_keras_model(qat_m)
+        # Dùng 100 mẫu đại diện để tính dải động cho INT8
+        for i in range(min(100, len(X_scaled_normal))):
+            yield [X_scaled_normal[i:i+1].astype(np.float32)]
+
+    conv = tf.lite.TFLiteConverter.from_keras_model(float_m)
     conv.optimizations = [tf.lite.Optimize.DEFAULT]
+    conv.representative_dataset = rep_gen
+    
+    # Ép kiểu toàn bộ tensor thành INT8
     conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
     conv.inference_input_type = tf.int8
     conv.inference_output_type = tf.int8
-    conv.representative_dataset = rep_gen
+    
+    print(f"--- Converting {name} to TFLite INT8 (PTQ)...")
     tfl = conv.convert()
     
     # 3. Đánh giá MAE trên mô hình INT8
@@ -323,13 +344,13 @@ def export_int8_and_verify(qat_m, X_raw_subset, vib_scaler, name, color):
     plt.xlabel('MAE'); plt.ylabel('Số lượng mẫu')
     plt.legend()
     plt.savefig(f'mae_sep_{name}.png')
-    plt.show()
+    # plt.show()
     
     return tfl, thr
 
-tfl_g, thr_g = export_int8_and_verify(qat_gentle, X_raw_gentle, vib_scaler_gentle, "GENTLE", colors[0])
-tfl_s, thr_s = export_int8_and_verify(qat_strong, X_raw_strong, vib_scaler_strong, "STRONG", colors[1])
-tfl_sp, thr_sp = export_int8_and_verify(qat_spin, X_raw_spin,   vib_scaler_spin,   "SPIN",   colors[2])
+tfl_g, thr_g = export_int8_and_verify(model_gentle, X_raw_gentle, vib_scaler_gentle, "GENTLE", colors[0])
+tfl_s, thr_s = export_int8_and_verify(model_strong, X_raw_strong, vib_scaler_strong, "STRONG", colors[1])
+tfl_sp, thr_sp = export_int8_and_verify(model_spin, X_raw_spin,   vib_scaler_spin,   "SPIN",   colors[2])
 
 # %%
 # ==========================================
@@ -350,6 +371,6 @@ h += f"const float VIB_CENTER_SPIN[{VIB_DIM}]   = {{{floats(vib_scaler_spin.cent
 h += f"const float VIB_CLIP_VAR_X = {VIB_CLIP[14]:.10f}f;\nconst float VIB_CLIP_VAR_Y = {VIB_CLIP[16]:.10f}f;\nconst float VIB_CLIP_VAR_Z = {VIB_CLIP[18]:.10f}f;\n\n"
 h += arr_to_c(tfl_g, "model_gentle_tflite") + arr_to_c(tfl_s, "model_strong_tflite") + arr_to_c(tfl_sp, "model_spin_tflite") + "#endif\n"
 
-open('firmware_v10/model_data.h', 'w').write(h)
+open('firmware_v12/model_data.h', 'w').write(h)
 
 print("[OK] Finished! Exported model_data.h for C++ Firmware!")
