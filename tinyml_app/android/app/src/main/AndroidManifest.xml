@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Bắt buộc phải cấp quyền Internet để App Release kết nối được MQTT -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
     <application
         android:label="tinyml_app"
         android:name="${applicationName}"

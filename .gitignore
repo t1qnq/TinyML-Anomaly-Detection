@@ -13,3 +13,29 @@ __pycache__/
 
 # QUAN TRỌNG: Chặn thư mục dataset nếu nó nặng hơn 100MB
 dataset_v6/
+
+# Bỏ qua file build tạm của LaTeX
+latex/*.aux
+latex/*.bbl
+latex/*.blg
+latex/*.fdb_latexmk
+latex/*.fls
+latex/*.lof
+latex/*.log
+latex/*.lot
+latex/*.nlo
+latex/*.nls
+latex/*.out
+latex/*.synctex.gz
+latex/*.toc
+latex/web.*
+latex/overview/*.aux
+
+# Bỏ qua file local/tạm trong quá trình rà soát
+.claude/
+fix_ref/
+doc/images/
+
+# Bỏ qua artifact mô hình và log đo đạc tạm
+*.h5
+serial_output.txt

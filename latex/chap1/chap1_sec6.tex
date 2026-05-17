@@ -1,0 +1,41 @@
+﻿
+
+\section{Các công trình liên quan và khoảng trống nghiên cứu}
+
+\subsection{Các công trình liên quan trong lĩnh vực giám sát và phát hiện bất thường}
+
+Giám sát tình trạng thiết bị và phát hiện bất thường cho các hệ thống máy móc là một bài toán quan trọng trong công nghiệp. Hầu hết các hệ thống giám sát Internet vạn vật hiện nay đều vận hành dựa trên kiến trúc điện toán đám mây. Trong đó, thiết bị biên đóng vai trò thu thập và truyền dữ liệu thô qua Internet về máy chủ để phân tích. Dù tận dụng được năng lực tính toán lớn, phương pháp này bộc lộ nhiều hạn chế khi áp dụng vào thiết bị gia dụng như: độ trễ phản hồi, sự phụ thuộc vào băng thông mạng, rủi ro rò rỉ dữ liệu cá nhân và chi phí hạ tầng \cite{ref_1_1, ref_1_4}.
+
+Gần đây, sự phát triển của công nghệ TinyML đã thúc đẩy xu hướng dịch chuyển trí tuệ nhân tạo ra vùng biên. Nghiên cứu của Mansoureh Lord (2021) \cite{ref_1_lord} đã chứng minh tính khả thi của việc chạy trực tiếp các thuật toán học máy trên vi điều khiển nhằm phát hiện dị thường. Tác giả đã thử nghiệm kiến trúc mạng nơ-ron tự mã hóa và biến phân tự mã hóa (Variational Autoencoder - VAE), trong đó mô hình tự mã hóa đạt độ chính xác 92\% khi nhận diện lỗi qua sai số tái tạo. Bên cạnh đó, một số nghiên cứu cũng đã triển khai các thuật toán máy học truyền thống như máy véc-tơ hỗ trợ (Support Vector Machine - SVM) hay rừng ngẫu nhiên trên thiết bị biên để giám sát cơ khí thời gian thực \cite{ref_1_7}. 
+
+Ở hướng học sâu không giám sát trên thiết bị gia dụng, Castangia và cộng sự (2022) \cite{ref_castangia_2022} đề xuất sử dụng VAE để phát hiện bất thường điện dựa trên chữ ký công suất của máy rửa bát, máy giặt và máy sấy. Nhóm tác giả tạo các điểm bất thường ngẫu nhiên nhằm mô phỏng lỗi điện thực tế, sau đó so sánh VAE với One-Class SVM sử dụng hai đặc trưng thủ công là năng lượng tiêu thụ và thời lượng chu kỳ. Kết quả cho thấy VAE đạt F1-Score lớn hơn 0,90 trên toàn bộ các thiết bị thử nghiệm, chứng minh lợi thế của học sâu trong việc mô hình hóa chu kỳ vận hành bình thường so với các đặc trưng thủ công.
+
+Đối với riêng máy giặt, Shul và cộng sự (2023) \cite{ref_shul_2023} khai thác phổ tiếng ồn vận hành để phát hiện bất thường bằng mạng DNN tự giám sát. Công trình này nhấn mạnh rằng tiếng ồn của máy giặt thay đổi mạnh theo khối lượng đồ giặt và độ mất cân bằng, khiến bài toán phát hiện bất thường khó hơn trong điều kiện thực tế. Để xử lý bối cảnh vận hành, nhóm tác giả sử dụng thêm thông tin tốc độ quay của lồng và khối lượng đồ giặt, huấn luyện mô hình dự đoán phổ tiếng ồn tương lai từ các phổ quá khứ và kiểm chứng chéo trên nhiều loại vải, khối lượng khác nhau. Mô hình đề xuất cải thiện ROC-AUC tối đa khoảng 1,4\% trên toàn bộ tập kiểm thử, cho thấy tiềm năng của dữ liệu âm thanh nhưng vẫn đòi hỏi mô hình DNN phức tạp và thông tin vận hành nội bộ từ máy giặt.
+
+Riêng với đối tượng máy giặt, các công trình hiện hành, tiêu biểu như của Mohammadi (2020) \cite{ref_1_3}, chủ yếu phân tích phổ rung động để phát hiện lỗi mất cân bằng tải. Tuy nhiên, các nghiên cứu này đa phần dựa trên học có giám sát – phương pháp đòi hỏi tập dữ liệu có nhãn lớn về các trạng thái lỗi. Điều này gây tốn kém chi phí và khó thực hiện trong điều kiện vận hành thiết bị gia dụng thực tế. 
+
+Hơn nữa, việc đồng bộ hóa dữ liệu từ nhiều cảm biến (âm thanh, rung động) đòi hỏi năng lực xử lý tín hiệu cao. Trong các vi điều khiển đơn nhân, việc luân phiên giữa tác vụ đọc cảm biến liên tục và suy luận AI thường gây ra hiện tượng trôi thời gian (time drift), dẫn đến mất mát dữ liệu đầu vào khi hệ thống xử lý các tác vụ có mức ưu tiên xung đột nhau \cite{ref_1_11}.
+
+\subsection{Khoảng trống nghiên cứu và đóng góp của đồ án}
+
+Từ các phân tích trên, đồ án nhận diện ba khoảng trống nghiên cứu khi áp dụng TinyML vào bài toán Phát hiện bất thường cho máy giặt, qua đó đề xuất các giải pháp kỹ thuật cụ thể:
+
+Thứ nhất, rào cản về cảnh báo giả do tính chất đa trạng thái của thiết bị. Máy giặt vận hành qua nhiều pha có đặc tính vật lý thay đổi liên tục. Do đó, đồ án đề xuất cơ chế Phân luồng đa trạng thái tự động (Chuyển đổi Ba trạng thái), giúp nhận diện pha vận hành theo thời gian thực từ dữ liệu chấn động, từ đó định tuyến dòng dữ liệu vào các mô hình học máy chuyên biệt (GENTLE, STRONG, SPIN). Hướng tiếp cận này giúp giảm thiểu tình trạng cảnh báo giả khi thiết bị chuyển pha.
+
+Thứ hai, giới hạn về dữ liệu lỗi và không gian bộ nhớ của vi điều khiển. Đồ án áp dụng kiến trúc mạng nơ-ron đối xứng không giám sát \cite{ref_1_5}, chỉ yêu cầu học từ phân phối dữ liệu bình thường. Để tối ưu hóa cho vi điều khiển Seeed Studio XIAO ESP32-S3, kỹ thuật lượng tử hóa nhận thức huấn luyện được tích hợp, giúp nén dung lượng mô hình nhưng vẫn duy trì độ chính xác trên miền số nguyên INT8.
+
+Thứ ba, thách thức về độ trễ và mất đồng bộ khi sử dụng đa cảm biến. Việc đồng thời trích xuất đặc trưng phổ âm thanh (I2S, Mel-filterbank) và đọc dữ liệu gia tốc (I2C) dễ làm gián đoạn luồng suy luận. Đồ án giải quyết vấn đề này bằng cách thiết kế hệ thống phần mềm xử lý song song thực sự trên nền tảng FreeRTOS. Tác vụ xử lý âm thanh được phân luồng vào lõi số 0, trong khi việc thu thập rung động và suy luận AI chạy trên lõi số 1. Dữ liệu giữa các luồng được đồng bộ hóa an toàn qua Nhóm sự kiện và Hàng đợi, ngăn ngừa hiện tượng thắt cổ chai phần cứng.
+
+Thông qua việc giải quyết đồng thời ba vấn đề trên, hệ thống được đề xuất hướng tới việc đảm bảo tính chính xác và độ phản hồi theo thời gian thực, cung cấp một phương pháp tiếp cận phù hợp cho các ứng dụng trí tuệ nhân tạo tại biên đa phương thức.
+
+% ==============================================================================
+% DANH MỤC TÀI LIỆU THAM KHẢO TRÍCH DẪN (CHI TIẾT)
+% ==============================================================================
+% \bibitem{ref_1_1} P. P. Ray, "A review on TinyML: State-of-the-art and prospects," Journal of King Saud University - Computer and Information Sciences, vol. 34, no. 4, pp. 1595-1623, 2022.
+% \bibitem{ref_1_lord} M. Lord, "TinyML Anomaly Detection," Master's thesis, Dept. Comput. Sci., California State Univ., Northridge, CA, USA, 2021.
+% \bibitem{ref_1_3} H. Mohammadi, "Early Detection of Imbalance in Load and Machine in Front Load Washing Machines by Monitoring Drum Movement," Master's thesis, Sabancı University, Istanbul, Turkey, 2020.
+% \bibitem{ref_1_4} X. Wang et al., "Empowering Edge Intelligence: A Comprehensive Survey on On-Device AI Models," arXiv preprint arXiv:2503.06027, 2025.
+% \bibitem{ref_1_5} "Unsupervised Anomaly Detection for IoT-Based Multivariate Time Series: Existing Solutions, Performance Analysis and Future Directions," Sensors, vol. 23, no. 1, 2023.
+% \bibitem{ref_1_7} E. Njor et al., "A Holistic Review of the TinyML Stack for Predictive Maintenance," IEEE Access, vol. 12, pp. 2450-2475, 2024.
+% \bibitem{ref_1_11} T. S. Ajani et al., "An Overview of Machine Learning within Embedded and Mobile Devices--Optimizations and Applications," Sensors, 2021.
+% \bibitem{ref_1_14} B. Jacob et al., "Quantization and Training of Neural Networks for Efficient Integer-Arithmetic-Only Inference," in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), 2018, pp. 2704-2713.
