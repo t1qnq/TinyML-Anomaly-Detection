@@ -141,9 +141,12 @@ def weighted_mae(y_true, y_pred):
 def build_model():
     return models.Sequential([
         layers.InputLayer(input_shape=(FEAT_DIM,)),
-        layers.Dense(128, activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
-        layers.Dense(64,  activation='sigmoid'), layers.Dense(64,  activation='sigmoid'),
-        layers.Dense(128, activation='sigmoid'), layers.Dense(FEAT_DIM, activation='sigmoid')
+        layers.Dense(128, activation='sigmoid'),
+        layers.Dense(64, activation='sigmoid'),
+        layers.Dense(32, activation='sigmoid'),
+        layers.Dense(64, activation='sigmoid'),
+        layers.Dense(128, activation='sigmoid'),
+        layers.Dense(FEAT_DIM, activation='sigmoid')
     ])
 
 def plot_training_history(hist_float, hist_qat, name, color):
