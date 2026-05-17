@@ -1,0 +1,196 @@
+\documentclass[14pt,a4paper]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese=nohyphenation]{hyphsubst}
+\usepackage[vietnamese]{babel}
+\usepackage{titlesec, blindtext, color}
+\usepackage[table,xcdraw]{xcolor}
+\usepackage{multibib}
+\newcites{web}{Website}
+
+\title{THIẾT KẾ HỆ THỐNG AIOT PHÁT HIỆN VÀ CẢNH BÁO BẤT THƯỜNG CHO MÁY GIẶT DÂN DỤNG SỬ DỤNG AUTOENCODER KHÔNG GIÁM SÁT TRÊN THIẾT BỊ BIÊN}
+\author{Quách Ngọc Quang}
+
+\definecolor{gray75}{gray}{0.75}
+\newcommand{\hsp}{\hspace{6pt}}
+\usepackage{environ}
+\NewEnviron{my_equation}{%
+\begin{equation}
+\scalebox{1.3}{$\BODY$}
+\end{equation}
+}
+\titleformat{\chapter}[hang]{\small\bfseries}{\thechapter\hsp\textcolor{gray75}{|}\hsp}{0pt}{\Huge\bfseries}
+
+\usepackage[left=3cm,right=2cm,top=2.5cm,bottom=3cm]{geometry}
+\setlength{\parindent}{1cm}
+\usepackage{indentfirst}   
+\setlength{\parskip}{6pt}
+
+%Section and Numbering Formatting
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{2}
+\renewcommand\thesubsubsection{\Alph{subsubsection}}
+
+\usepackage{sectsty}
+\chapterfont{\centering}
+\renewcommand{\baselinestretch}{1.3} %format distance between lines
+\usepackage{xcolor}
+\usepackage[unicode]{hyperref}
+\hypersetup{
+colorlinks = false,
+linkbordercolor = {white}
+}
+\usepackage{xurl}
+\Urlmuskip=0mu plus 1mu
+\usepackage{graphicx}
+\usepackage{lmodern}
+\usepackage[font=large,labelfont=bf,labelsep=newline,justification=centering]{caption} % Tên ở trên, mô tả ở dưới (sau), căn giữa
+
+% abbreviation
+\usepackage{nomencl}
+\makenomenclature
+\renewcommand{\nomname}{Bảng ký hiệu và chữ viết tắt}
+%% This code creates the groups
+% -----------------------------------------
+\usepackage{etoolbox}
+\renewcommand\nomgroup[1]{%
+  \item[\bfseries
+  \ifstrequal{#1}{T}{Chữ viết tắt}{%
+  \ifstrequal{#1}{K}{Ký hiệu}}%
+]}
+% ------
+
+\usepackage{kantlipsum}
+\usepackage{listings}
+\usepackage{subcaption}
+\usepackage{bm}
+\usepackage[para]{footmisc}
+\usepackage{amsfonts}
+\usepackage{afterpage}
+\usepackage{float}
+\usepackage{tikz}
+\usepackage{pdfpages}
+\usepackage{xspace}
+\usepackage{multirow}
+% \usepackage{subfiles}
+
+\usepackage{algorithm}
+% \usepackage{algorithm2e} 
+\usepackage{algorithmic}
+
+\renewcommand{\listalgorithmname}{Danh sách thuật toán}
+\renewcommand{\lstlistingname}{Đoạn mã}
+\renewcommand{\lstlistlistingname}{Danh sách đoạn mã}
+\renewcommand{\algorithmicrequire}{\textbf{Given:}}
+\renewcommand{\algorithmicensure}{\textbf{Step }\textbf{Input :}}
+
+\usepackage{physics}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{tabularx, booktabs, makecell, caption}
+\usepackage{siunitx}
+\usepackage{adjustbox}
+
+\usetikzlibrary{calc}
+\usepackage{frontespizio}
+% \usepackage[perpage]{footmisc}
+\usepackage{perpage}
+\MakePerPage{footnote}
+\usepackage{longtable}
+% \usepackage[backend=biber,style=ieee,sorting=none]{biblatex}
+% \addbibresource{reference.bib}
+% format titile chapter section ...
+\titleformat{\chapter}[display]
+{\large}
+{
+	\large\MakeUppercase{\chaptertitlename}~\thechapter}
+{1pc}
+{\titlerule\huge}
+
+\titleformat*{\section}{\normalfont \Large}
+\titleformat*{\subsection}{\normalfont \large}
+
+\newtheorem{theorem}{Định lý}
+\newtheorem{proposition}{Mệnh đề}
+\newtheorem{assumption}{Giả thiết}
+\newtheorem{lemma}{Bổ đề}
+\newtheorem{remark}{Nhận xét}
+\newtheorem{definition}{Định nghĩa}
+
+\newenvironment{vietnamesealgorithm}[1][]
+  {\begin{algorithm}[#1]
+    \hrule height:.8pt depth:0pt
+     \selectlanguage{vietnamese}%
+     \floatname{algorithm}{Thuật toán}%
+      \renewcommand{\algorithmicrequire}{\textbf{Given}}%
+      \renewcommand{\algorithmicensure}{\textbf{Step}}
+  }
+  {\end{algorithm}}
+
+\begin{document}
+
+\include{overview/title}
+
+\pagenumbering{roman}
+\include{overview/sumary}
+\include{overview/thanks}
+\include{overview/contents}
+\include{overview/intro}
+\include{overview/abbreviation}
+
+\pagenumbering{arabic}
+\fontsize{13}{15}\selectfont
+
+\chapter{TỔNG QUAN LÝ THUYẾT}
+\input{chap1/chap1_sec1}
+\input{chap1/chap1_sec2}
+\input{chap1/chap1_sec3}
+\input{chap1/chap1_sec4}
+\input{chap1/chap1_sec5}
+\input{chap1/chap1_sec6}
+
+
+\chapter{THIẾT KẾ HỆ THỐNG}
+\input{chap2/chap2_sec1}
+\input{chap2/chap2_sec2}
+\input{chap2/chap2_sec3}
+\input{chap2/chap2_sec4}
+\input{chap2/chap2_sec5}
+
+\chapter{XÂY DỰNG DỮ LIỆU VÀ HUẤN LUYỆN MÔ HÌNH}
+\input{chap3/chap3_sec1}
+\input{chap3/chap3_sec2}
+\input{chap3/chap3_sec3}
+\input{chap3/chap3_sec4}
+
+\chapter{TRIỂN KHAI VÀ ĐÁNH GIÁ KẾT QUẢ}
+\input{chap4/chap4_sec1}
+\input{chap4/chap4_sec2}
+\input{chap4/chap4_sec3}
+\input{chap4/chap4_sec4}
+\input{chap4/chap4_sec5}
+\input{chap4/chap4_sec6}
+\input{chap4/chap4_sec7}
+
+\chapter{KẾT LUẬN}
+\input{chap5/chap5_sec1}
+\input{chap5/chap5_sec2}
+\input{chap5/chap5_sec3}
+
+\chapter*{TÀI LIỆU THAM KHẢO}
+\addcontentsline{toc}{chapter}{TÀI LIỆU THAM KHẢO}
+
+\begingroup
+\renewcommand{\clearpage}{} % Ngăn chặn nhảy trang mới giữa các nhóm Ref
+\sloppy
+\emergencystretch=3em
+
+\renewcommand{\bibname}{Tài liệu tiếng Anh}
+\bibliographystyle{vietnumeric}
+\bibliography{ref}
+
+\bibliographystyleweb{vietnumeric}
+\bibliographyweb{ref}
+\endgroup
+
+\end{document}

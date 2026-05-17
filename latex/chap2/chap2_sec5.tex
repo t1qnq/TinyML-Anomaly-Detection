@@ -1,0 +1,35 @@
+
+\section{Thiết kế hạ tầng truyền thông Internet of Things}
+
+Hệ thống yêu cầu một hạ tầng mạng ổn định và tiết kiệm tài nguyên để truyền kết quả suy luận từ thiết bị biên đến người dùng. Đồ án sử dụng giao thức MQTT làm nền tảng giao tiếp, kết hợp với các cơ chế điều phối luồng tin phù hợp với giới hạn của vi điều khiển Seeed Studio XIAO ESP32-S3.
+
+MQTT là giao thức truyền thông điệp gọn nhẹ, hoạt động theo mô hình xuất bản - đăng ký và được chuẩn hóa bởi OASIS cho các hệ thống IoT \citeweb{ref_mqtt_oasis}. Thay vì yêu cầu thiết bị biên kết nối trực tiếp đến từng ứng dụng người dùng, MQTT sử dụng một máy chủ trung gian để tiếp nhận, định tuyến và phân phối bản tin theo chủ đề. Cơ chế này giúp giảm độ phụ thuộc giữa thiết bị gửi và thiết bị nhận, đồng thời phù hợp với các nút mạng tài nguyên hạn chế nhờ kích thước bản tin nhỏ và chi phí duy trì kết nối thấp \citeweb{ref_hivemq_docs}.
+
+\subsection{Mô hình xuất bản - đăng ký (Publish/Subscribe) và Broker}
+Thay vì truyền tải dữ liệu cảm biến thô lên đám mây, kiến trúc trí tuệ nhân tạo tại biên cho phép thiết bị biên giữ lại vai trò xử lý tính toán. Nút mạng Seeed Studio XIAO ESP32-S3 đóng vai trò là một \textit{Publisher}, chỉ xuất bản các kết quả đã qua suy luận.
+
+Hệ thống sử dụng HiveMQ Cloud làm dịch vụ máy chủ MQTT trung gian. Ứng dụng di động Flutter đóng vai trò là \textit{Subscriber}, đăng ký các chủ đề (Topic) cụ thể để nhận thông tin từ máy giặt. Mô hình xuất bản - đăng ký tách biệt logic hoạt động giữa thiết bị vật lý và phần mềm giám sát, giúp hai thành phần có thể phát triển độc lập.
+
+\subsection{Cấu trúc bản tin chuẩn hóa JSON}
+Dữ liệu giám sát được đóng gói theo định dạng JSON để tương thích đa nền tảng. Bản tin được thiết kế tối giản nhằm giảm overhead khi phân giải chuỗi (parsing) trên vi điều khiển, bao gồm 3 trường thông tin:
+\begin{itemize}
+    \item \texttt{mode}: Trạng thái vận hành hiện tại của máy giặt (GENTLE, STRONG, hoặc SPIN).
+    \item \texttt{mae}: Giá trị sai số tái tạo do mô hình tự mã hóa xuất ra.
+    \item \texttt{state}: Trạng thái đánh giá của hệ thống sau bộ lọc thời gian (OK, HIGH, hoặc ALARM).
+\end{itemize}
+
+\subsection{Kỹ thuật truyền tin hỗn hợp: Telemetry định kỳ và Hướng sự kiện}
+Để cân bằng giữa yêu cầu trực quan hóa dữ liệu trên ứng dụng và giới hạn tài nguyên mạng, hệ thống triển khai hàm \texttt{mqtt\_smart\_publish()} tích hợp hai cơ chế truyền tin:
+
+\begin{enumerate}
+    \item \textbf{Truyền tin định kỳ (Dữ liệu đo xa 1 Hz):} Hệ thống thiết lập chu kỳ xuất bản bản tin 1 giây/lần. Tần số này đủ để cung cấp đồ thị sai số tái tạo (MAE) mượt mà trên ứng dụng giám sát thời gian thực, đồng thời không gây quá tải cho các tác vụ xử lý mạng của vi điều khiển.
+
+    \item \textbf{Truyền tin hướng sự kiện:} Khi thuật toán nhận diện có sự thay đổi về trạng thái \texttt{state} (ví dụ: chuyển từ OK sang ALARM), một bản tin ngắt sẽ được xuất bản ngay lập tức mà không chờ đến chu kỳ tiếp theo, giữ độ trễ cảnh báo ở mức thấp nhất có thể.
+\end{enumerate}
+
+\subsection{Bảo mật truyền tải và Đánh đổi tài nguyên (Trade-offs)}
+Hệ thống kết nối với Broker thông qua cổng 8883 để sử dụng giao thức MQTTS (MQTT qua TLS/SSL). Tuy nhiên, do phần lớn RAM của vi điều khiển Seeed Studio XIAO ESP32-S3 đã được cấp phát cho Tensor Arena của các mô hình AI, hệ thống cấu hình lớp \texttt{WiFiClientSecure} ở chế độ \texttt{setInsecure()}.
+
+Phương pháp này vẫn mã hóa tải trọng (khối dữ liệu) trên đường truyền, nhưng bỏ qua bước xác thực chứng chỉ máy chủ Broker \cite{ref_2_tls_iot}. Đây là sự đánh đổi phù hợp với điều kiện tài nguyên hạn chế của phần cứng hiện tại; việc tích hợp xác thực chứng chỉ đầy đủ được xác định là hướng mở rộng cho các phiên bản phần cứng sau.
+
+% \bibitem{ref_2_tls_iot} M. Frustaci, G. Pace, G. Aloi, and G. Fortino, "Evaluating Critical Security Issues of the IoT World: Present and Future Challenges," IEEE Internet of Things Journal, vol. 5, no. 4, pp. 2483-2495, 2018.

@@ -1,0 +1,59 @@
+\section{Bài toán phát hiện bất thường}
+
+Phát hiện bất thường là bước nền tảng trong các hệ thống giám sát tình trạng thiết bị dựa trên dữ liệu. Trong bối cảnh Internet vạn vật (IoT) và giám sát thiết bị gia dụng, việc nhận diện sớm các dị thường trong tín hiệu cảm biến chuỗi thời gian cho phép phát hiện các sai lệch cơ khí trước khi chúng dẫn đến hỏng hóc nghiêm trọng. Bất thường, hay Điểm dị thường (Outlier), được hiểu là các mẫu dữ liệu lệch khỏi hành vi bình thường mà hệ thống đã học được \cite{ref_1_6}.
+
+\subsection{Khái niệm và phân loại bất thường}
+
+Dựa trên mối quan hệ không gian và thời gian giữa các điểm dữ liệu, các dị thường thường được chia thành ba dạng: Bất thường điểm (Point anomalies), Bất thường ngữ cảnh (Contextual anomalies) và Bất thường tập hợp (Collective anomalies) \cite{ref_1_6, ref_1_7}.
+
+Bất thường điểm xảy ra khi một mẫu dữ liệu đơn lẻ có giá trị sai lệch đột biến so với phân phối chung, ví dụ như một xung gia tốc biên độ lớn xuất hiện tức thời do va đập vật lý bất ngờ vào vỏ máy. Bất thường ngữ cảnh là dạng phức tạp hơn — một điểm dữ liệu chỉ được xem là bất thường khi đặt trong một bối cảnh cụ thể; chẳng hạn, rung lắc mạnh và tiếng ồn lớn là hành vi bình thường ở pha Vắt (Spin), nhưng lại là dấu hiệu hư hỏng nếu xuất hiện trong pha Giặt nhẹ (Gentle). Bất thường tập hợp phản ánh một chuỗi điểm dữ liệu liên tiếp có hành vi sai lệch so với quy luật tổng thể, dù từng điểm đơn lẻ có thể không vượt ngưỡng cảnh báo thông thường. Do máy giặt vận hành theo chu kỳ nhiều pha với đặc trưng tín hiệu khác nhau, đồ án tập trung vào hai dạng bất thường ngữ cảnh và tập hợp thông qua cơ chế phân mảnh trạng thái vận hành \cite{ref_1_5}.
+
+\subsection{Các hướng tiếp cận học máy và thách thức khi thiếu hụt dữ liệu lỗi}
+
+Khi ứng dụng học máy vào bài toán chẩn đoán trạng thái thiết bị, hai hướng tiếp cận phổ biến nhất là học có giám sát (Supervised) và học không giám sát (Unsupervised) \cite{ref_1_5}. Phương pháp có giám sát đòi hỏi tập dữ liệu (Dataset) phải được gán nhãn đầy đủ cho cả trạng thái bình thường (Healthy state) và các dạng lỗi để thiết lập ranh giới quyết định. Tuy nhiên, hướng đi này gặp một hạn chế lớn trong thực tế: dữ liệu hỏng hóc cơ khí thường rất khan hiếm. Việc chủ động gây ra sự cố trên thiết bị thật để thu thập dữ liệu không chỉ tốn kém mà còn tiềm ẩn rủi ro mất an toàn \cite{ref_1_3}.
+
+Ngược lại, phương pháp học không giám sát chỉ yêu cầu hệ thống học các đặc trưng của trạng thái bình thường — loại dữ liệu rất sẵn có và dễ thu thập trong giai đoạn đầu thiết bị vận hành. Trong quá trình hoạt động, các tín hiệu lệch khỏi phân phối bình thường đã học sẽ được hệ thống nhận diện là bất thường \cite{ref_1_4}. Do giới hạn về khả năng mô phỏng đầy đủ các lỗi vật lý trên máy giặt, đồ án này lựa chọn mạng nơ-ron tự mã hóa thuộc nhóm học không giám sát. Cách tiếp cận này giúp mô hình trích xuất hiệu quả các đặc trưng phi tuyến từ dữ liệu đa phương thức mà không phụ thuộc vào tập dữ liệu nhãn lỗi \cite{ref_1_6}.
+
+\subsection{Phương pháp đánh giá bất thường dựa trên sai số tái tạo}
+
+Mạng tự mã hóa phát hiện bất thường thông qua cơ chế nén và khôi phục tín hiệu. Về cấu trúc, bộ mã hóa (Encoder) nén dữ liệu đầu vào $X$ xuống một không gian ẩn (Latent space) có số chiều thấp hơn để trích xuất các đặc trưng cốt lõi. Sau đó, bộ giải mã (Decoder) tái tạo lại dữ liệu từ không gian ẩn này thành bản sao $\hat{X}$ \cite{ref_1_6}. Vì mô hình chỉ được huấn luyện trên dữ liệu bình thường, nó sẽ tái tạo rất chính xác các tín hiệu cơ học quen thuộc. Ngược lại, khi máy giặt gặp sự cố, tín hiệu cảm biến sẽ chứa các thành phần tần số hoặc biên độ lạ, khiến bộ giải mã không thể khôi phục chính xác và tạo ra sai số lớn.
+
+Sự chênh lệch giữa đầu vào gốc $X$ và đầu ra tái tạo $\hat{X}$ chính là Sai số tái tạo (Reconstruction Error). Trong môi trường TinyML giới hạn tài nguyên như vi điều khiển Seeed Studio XIAO ESP32-S3, đồ án ưu tiên sử dụng hàm Sai số tuyệt đối trung bình (Mean Absolute Error - MAE) thay vì MSE. Lựa chọn này giúp giảm thiểu số chu kỳ tính toán của CPU trên dữ liệu số nguyên 8-bit (INT8), đồng thời tránh hiện tượng bùng nổ gradient khi tín hiệu đầu vào lẫn các Xung nhiễu (Spikes) cực đại \cite{ref_1_1, ref_1_4}. Công thức tính MAE cho một mẫu đầu vào có $N$ chiều đặc trưng được biểu diễn ở Phương trình \ref{eq:mae_theory}:
+
+\begin{equation}\label{eq:mae_theory}MAE = \frac{1}{N} \sum_{i=1}^{N} |x_i - \hat{x}_i|\end{equation}
+
+Hệ thống ra quyết định bằng cách so sánh MAE tức thời với một ngưỡng dị thường $\theta$ (được rút ra từ phân phối thống kê của tập huấn luyện). Nếu $MAE > \theta$, thiết bị bị coi là có bất thường. Tuy nhiên, để tránh các False Positives do nhiễu môi trường nhất thời, hệ thống được tích hợp thêm bộ lọc Lọc nhiễu thời gian (Temporal Smoothing). Thay vì cảnh báo ngay lập tức, hệ thống quan sát cửa sổ 10 mẫu gần nhất và chỉ kích hoạt báo động khi có ít nhất 5 mẫu vượt ngưỡng $\theta$.
+
+% ============================================================
+% GHI CHÚ TÀI LIỆU THAM KHẢO CHO MỤC 1.1
+% ============================================================
+%
+% \bibitem{ref_1_1}
+% P. P. Ray, "A review on TinyML: State-of-the-art and prospects,"
+% \textit{Journal of King Saud University – Computer and Information Sciences}, vol. 34, pp. 1595–1623, 2022.
+%
+% \bibitem{ref_1_3}
+% H. Mohammadi, "EARLY DETECTION OF IMBALANCE IN LOAD AND MACHINE IN FRONT LOAD WASHING MACHINES BY MONITORING DRUM MOVEMENT,"
+% \textit{Master's Thesis, Sabancı University}, 2020.
+%
+% \bibitem{ref_1_4}
+% X. Wang et al., "Empowering Edge Intelligence: A Comprehensive Survey on On-Device AI Models,"
+% \textit{arXiv preprint arXiv:2503.06027v1}, 2025.
+%
+% \bibitem{ref_1_5}
+% "Unsupervised Anomaly Detection for IoT-Based Multivariate Time Series: Existing Solutions, Performance Analysis and Future Directions,"
+% \textit{PMC}, 2023.
+%
+% \bibitem{ref_1_6}
+% R. Chalapathy and S. Chawla, "DEEP LEARNING FOR ANOMALY DETECTION: A SURVEY,"
+% \textit{arXiv preprint arXiv:1901.03407}, 2019.
+%
+% \bibitem{ref_1_7}
+% E. Njor, M. A. Hasanpour, J. Madsen, and X. Fafoutis, "A Holistic Review of the TinyML Stack for Predictive Maintenance,"
+% \textit{IEEE Access}, vol. 12, pp. 184861-184882, 2024.
+%
+% \bibitem{ref_1_9} 
+% M. Braei and S. Wagner, "Anomaly Detection in Univariate Time-series: A Survey on the State-of-the-Art,"
+% \textit{arXiv preprint arXiv:2004.02051}, 2020.
+%
+% ============================================================

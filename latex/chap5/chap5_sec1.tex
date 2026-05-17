@@ -1,0 +1,31 @@
+\addcontentsline{toc}{chapter}{KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN}
+\label{chap:ket_luan}
+
+\section{Những kết quả đạt được}
+
+Trải qua quá trình nghiên cứu và thực nghiệm, đề tài đã hoàn thành đầy đủ các mục tiêu đề ra với những kết quả trọng tâm sau:
+
+\begin{itemize}
+    \item \textbf{Về mặt thuật toán:} Xây dựng thành công kiến trúc \textit{mạng nơ-ron tự mã hóa Ba trạng thái} cho phép tối ưu hóa việc phát hiện bất thường theo từng pha vận hành vật lý của thiết bị. Việc kết hợp đặc trưng âm thanh (13 dải bộ lọc Mel) và rung động đã nâng cao đáng kể độ nhạy của hệ thống.
+    \item \textbf{Về mặt triển khai:} Triển khai thành công mô hình học máy tại biên trên vi điều khiển Seeed Studio XIAO ESP32-S3. Mô hình sau lượng tử hóa INT8 đạt hiệu suất cao với thời gian suy luận trung bình 6,44 ms, chiếm dụng tài nguyên thấp với tổng dung lượng 95,3 KB cho 3 mô hình mạng nơ-ron tự mã hóa.
+    \item \textbf{Về mặt hệ thống:} Hoàn thiện giải pháp \textit{từ biên đến đám mây} tích hợp giao thức MQTT, cho phép giám sát trạng thái thiết bị theo thời gian thực và cung cấp khả năng cảnh báo tự động thông qua hạ tầng Internet vạn vật (IoT).
+    \item \textbf{Về mặt thực nghiệm:} Đạt được các chỉ số hiệu năng nhất quán trên ba pha vận hành, với F1-Score lần lượt là 0,9898 (GENTLE), 0,9892 (STRONG) và 0,9967 (SPIN). Pha vắt đạt Recall bằng 1,0000, đồng thời hệ thống kiểm soát tốt tỷ lệ cảnh báo giả nhờ cơ chế lọc trễ thời gian.
+\end{itemize}
+
+\begin{table}[H]
+    \centering
+    \caption{Tổng hợp các kết quả định lượng chính của đồ án.}
+    \label{tab:final_summary_metrics}
+    \begin{tabular}{lp{9.5cm}}
+        \hline
+        \textbf{Nhóm đánh giá} & \textbf{Kết quả đạt được} \\
+        \hline
+        Hiệu năng phát hiện & F1-Score: GENTLE 0,9898; STRONG 0,9892; SPIN 0,9967. \\
+        Độ nhạy cảnh báo & Recall: GENTLE 0,9960; STRONG 0,9982; SPIN 1,0000. \\
+        Độ trễ suy luận & Trung bình 6,439 ms trên 3.000 phép đo thực tế, mỗi mô hình đo 1.000 lần. \\
+        Dung lượng mô hình & 95,3 KB cho toàn bộ 3 mô hình INT8. \\
+        Dung lượng firmware & 1.254.517 bytes, xấp xỉ 1,20 MB, chiếm khoảng 37\% bộ nhớ chương trình. \\
+        Kiến trúc hệ thống & Thiết bị biên ESP32-S3, suy luận TinyML, truyền cảnh báo qua MQTT và ứng dụng Flutter/Firebase. \\
+        \hline
+    \end{tabular}
+\end{table}

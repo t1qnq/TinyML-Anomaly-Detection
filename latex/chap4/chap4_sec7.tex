@@ -1,0 +1,28 @@
+\section{Thảo luận và phân tích các mặt hạn chế}
+\label{sec:thao_luan_han_che}
+
+Mặc dù hệ thống mạng nơ-ron tự mã hóa ba trạng thái đạt được các chỉ số ấn tượng, quá trình thực nghiệm trong môi trường thực tế vẫn lộ ra những rào cản kỹ thuật. Nhận diện các hạn chế này là bước cần thiết để hướng dẫn cải tiến trong tương lai.
+
+\subsection{Hiện tượng Concept Drift và sự lão hóa cơ khí}
+
+Máy giặt chịu ảnh hưởng mạnh từ sự lão hóa theo thời gian. Các linh kiện như lò xo treo, giảm chấn cao su hay dây curoa sẽ thay đổi đặc tính đàn hồi sau 2-3 năm sử dụng.
+
+\begin{itemize}
+    \item \textbf{Sự dịch chuyển phân phối:} Khi thiết bị lâu năm, biên độ rung động bình thường tự động dịch chuyển lên dải năng lượng cao hơn. Do mô hình tự mã hóa là tĩnh, các ngưỡng $\tau$ xác lập từ máy mới có thể trở quá nhạy, tăng tỷ lệ báo động giả (False Positives).
+    
+    \item \textbf{Thách thức về huấn luyện trên thiết bị:} Để khắc phục, hệ thống cần tự học lại hoặc tinh chỉnh tại biên để thích ứng với máy cũ. Tuy nhiên, giới hạn SRAM (512 KB) và chu kỳ CPU không cho phép thực hiện lan truyền ngược trực tiếp trên Seeed Studio XIAO ESP32-S3. Giải pháp hiện tại vẫn phụ thuộc vào thu thập dữ liệu và cập nhật firmware qua OTA.
+\end{itemize}
+
+\subsection{Độ tin cậy hạ tầng và điều kiện vật lý của cảm biến}
+
+Triển khai Trí tuệ nhân tạo (AI) tại biên trong môi trường dân dụng gặp các yếu tố bên ngoài:
+
+\begin{itemize}
+    \item \textbf{Sự ổn định của kết nối không dây:} Mặc dù suy luận AI diễn ra hoàn toàn offline, nhưng cảnh báo gửi tới người dùng phụ thuộc vào Wi-Fi 2.4 GHz. Trong môi trường nhà ở với nhiều vật cản, rớt gói tin (Packet Loss) có thể trễ thông báo. Một cơ chế cảnh báo vật lý (như còi Buzzer) tại chỗ cần thiết để bảo đảm.
+    
+    \item \textbf{Tác động của nhiệt độ và độ ẩm:} Máy giặt vận hành trong môi trường độ ẩm cao và nhiệt độ biến thiên (khi giặt nước nóng). Các cảm biến MEMS như ADXL345 và INMP441 có thể bị sai lệch (Offset Drift) nếu không được bảo vệ bằng vỏ chống nước IP67. Sai lệch nhỏ trong cảm biến có thể làm thay đổi vector đặc trưng đầu vào, gây nhiễu cho mô hình.
+\end{itemize}
+
+\subsection{Giới hạn của dữ liệu lỗi giả lập}
+
+Hệ thống được kiểm chứng chủ yếu trên các lỗi cơ khí tức thời (như lệch tải trọng lồng giặt). Các loại lỗi tiến triển chậm như mòn vòng bi (bearing wear) hay rò rỉ nước nhỏ đòi hỏi tập dữ liệu Run-to-failure kéo dài hàng trăm giờ — một nguồn lực vượt quy mô của đồ án này. Do đó, khả năng tổng quát hóa của mô hình đối với các hư hỏng tiến triển chậm vẫn cần kiểm chứng thực địa dài hạn.
