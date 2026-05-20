@@ -54,7 +54,7 @@ def read_wav_int16_mono(path: str, expected_sr: int = SR) -> np.ndarray:
     with wave.open(path, "rb") as wf:
         ch = wf.getnchannels()
         sw = wf.getsampwidth()
-        sr = wf.getframerate()
+        sr = wminhf.getframerate()
         n  = wf.getnframes()
         if ch != 1:
             raise ValueError(f"WAV must be mono (channels={ch})")

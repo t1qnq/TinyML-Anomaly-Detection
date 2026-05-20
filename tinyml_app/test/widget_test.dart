@@ -1,30 +1,22 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:tinyml_app/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('wash mode parsing', () {
+    test('parses supported modes case-insensitively', () {
+      expect(parseModeFromString('GENTLE'), WashMode.gentle);
+      expect(parseModeFromString('strong'), WashMode.strong);
+      expect(parseModeFromString('Spin'), WashMode.spin);
+    });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    test('falls back to unknown for missing or unsupported values', () {
+      expect(parseModeFromString(null), WashMode.unknown);
+      expect(parseModeFromString('rinse'), WashMode.unknown);
+    });
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('defines MAE thresholds for every supported wash mode', () {
+    expect(kThresholds.keys, containsAll(['GENTLE', 'STRONG', 'SPIN']));
+    expect(kThresholds.values.every((threshold) => threshold > 0), isTrue);
   });
 }

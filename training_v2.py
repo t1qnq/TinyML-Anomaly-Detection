@@ -318,7 +318,7 @@ tfl_sp, thr_sp, res_sp = export_int8_and_verify_v2(qat_spin, X_test_spin, scaler
 
 # %%
 # ==========================================
-# CELL 6: TẠO FILE model_data.h CHO C++
+# CELL 6: TẠO FILE model_data_v2.h CHO C++
 # ==========================================
 def arr_to_c(data, name):
     lines = ['  ' + ', '.join(f'0x{b:02x}' for b in data[i:i+12]) for i in range(0, len(data), 12)]
@@ -353,5 +353,6 @@ results_v2 = {
 with open('results_v2.json', 'w', encoding='utf-8') as f:
     json.dump(results_v2, f, indent=2, ensure_ascii=False)
 
+open('firmware_v11/model_data_v2.h', 'w', encoding='utf-8').write(h)
 open('firmware_v11/model_data.h', 'w', encoding='utf-8').write(h)
-print("[OK] Exported leakage-free model_data.h and results_v2.json!")
+print("[OK] Exported leakage-free model_data_v2.h, model_data.h and results_v2.json!")

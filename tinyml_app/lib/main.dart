@@ -28,9 +28,9 @@ const int    kMaxHistory       = 30;
 
 // MAE thresholds per mode (phải khớp firmware)
 const Map<String, double> kThresholds = {
-  'GENTLE': 0.1241,
-  'STRONG': 0.0968,
-  'SPIN':   0.0672,
+  'GENTLE': 0.0469,
+  'STRONG': 0.1077,
+  'SPIN':   0.0989,
 };
 
 // ─────────────────────────────────────────────
@@ -1134,13 +1134,16 @@ class _StatsTab extends StatelessWidget {
 
         
         // Technical Indicators
-        _SectionHeader(title: 'Thông số kỹ thuật (V11)'),
+        _SectionHeader(title: 'Thông số kỹ thuật (V2)'),
         const SizedBox(height: 12),
         _buildTechInfo(label: 'Kiến trúc', value: 'Symmetric Autoencoder'),
         _buildTechInfo(label: 'Cấu trúc', value: '19-128-64-32-64-128-19'),
-        _buildTechInfo(label: 'Tổng tham số', value: '25,779 parameters'),
+        _buildTechInfo(label: 'Tham số/model', value: '25,779 params'),
         _buildTechInfo(label: 'Tối ưu hóa', value: 'INT8 QAT (Quantization)'),
-        _buildTechInfo(label: 'Flash/RAM', value: '~95KB / ~120KB'),
+        _buildTechInfo(label: 'Model INT8', value: '~95.3KB / 3 pha'),
+        _buildTechInfo(label: 'Tensor arena', value: '3 x 40KB PSRAM'),
+        _buildTechInfo(label: 'Firmware Flash', value: '~1.20MB'),
+        _buildTechInfo(label: 'SRAM global', value: '~62KB'),
       ],
     );
   }
