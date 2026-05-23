@@ -1,13 +1,13 @@
 ﻿// ============================================================
-//  TinyML Anomaly Detection - Xiao ESP32S3
-//  Final firmware - true parallel dual-core runtime.
-//    Core 0 | audio_task : I2S capture + FFT + 13 log-Mel features.
-//    Core 1 | vib_task   : ADXL345 vibration features.
-//    Core 1 | ai_task    : phase routing + INT8 Autoencoder inference.
+//  TinyML phát hiện bất thường - Xiao ESP32S3
+//  Firmware final - chạy song song thật trên hai lõi.
+//    Lõi 0 | audio_task : thu I2S + FFT + 13 đặc trưng log-Mel.
+//    Lõi 1 | vib_task   : tính đặc trưng rung từ ADXL345.
+//    Lõi 1 | ai_task    : định tuyến pha + suy luận Autoencoder INT8.
 //
-//  Hardware:
-//    INMP441 microphone   : WS=6, BCLK=43, DIN=44
-//    ADXL345 accelerometer: SDA=5, SCL=4
+//  Phần cứng:
+//    Microphone INMP441 : WS=6, BCLK=43, DIN=44
+//    Gia tốc kế ADXL345 : SDA=5, SCL=4
 // ============================================================
 
 #include <Wire.h>
@@ -28,7 +28,7 @@
 #include <ArduinoJson.h>
 
 // ============================================================
-// SECTION 1: CONSTANTS & ENUMS
+// PHẦN 1: HẰNG SỐ VÀ ENUM
 // ============================================================
 
 #define PIN_I2S_WS    6
@@ -61,7 +61,7 @@ enum AiMode { MODE_GENTLE, MODE_STRONG, MODE_SPIN };
 #define WEIGHT_SUM     (MEL_DIM * WEIGHT_MEL + VIB_DIM * WEIGHT_VIB)
 
 // ============================================================
-// SECTION 2: MEL FILTERBANK
+// PHẦN 2: BỘ LỌC MEL
 // ============================================================
 
 struct MelBand { int lo, mid, hi; };
@@ -74,7 +74,7 @@ static const MelBand MEL_FB[MEL_BANDS] = {
     {182,215,255 },
 };
 
-// Apply the fixed 13-band triangular Mel filterbank to one FFT spectrum.
+// Áp dụng bộ lọc Mel tam giác 13 dải cố định lên một phổ FFT.
 static void mel_power(const float* fft, float* out) {
     for (int b = 0; b < MEL_BANDS; b++) {
         float p = 0.0f;
@@ -96,15 +96,15 @@ static void mel_power(const float* fft, float* out) {
 }
 
 // ============================================================
-// SECTION 3: GLOBALS, QUEUES & SYNC
+// PHẦN 3: BIẾN TOÀN CỤC, QUEUE VÀ ĐỒNG BỘ
 // ============================================================
 
-// Wi-Fi and MQTT values are generated into env_config.h from the local env file.
+// Giá trị Wi-Fi/MQTT được sinh vào env_config.h từ file .env local.
 
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 
-// Reconnect to the MQTT broker without blocking the AI tasks.
+// Kết nối lại MQTT broker; hàm chạy trong loop nên không chặn các task AI.
 void reconnect_mqtt() {
     if (!mqttClient.connected()) {
         Serial.print("[MQTT] Connecting to HiveMQ Cloud...");
@@ -119,7 +119,7 @@ void reconnect_mqtt() {
 
 static int32_t hpf_x = 0, hpf_y = 0;
 
-// Simple high-pass filter to remove microphone DC drift before FFT.
+// Bộ lọc thông cao đơn giản để loại bỏ trôi DC microphone trước FFT.
 static inline int16_t hpf(int16_t in) {
     int32_t cx = (int32_t)in;
     int32_t cy = (243 * (hpf_y + cx - hpf_x)) >> 8;
@@ -132,8 +132,8 @@ struct FeatureVec {
     float scaled[FEAT_DIM];
 };
 
-static QueueHandle_t     audio_queue  = nullptr;  // float[MEL_DIM]
-static QueueHandle_t     vib_queue    = nullptr;  // float[VIB_DIM]
+static QueueHandle_t     audio_queue  = nullptr;  // Mảng float[MEL_DIM].
+static QueueHandle_t     vib_queue    = nullptr;  // Mảng float[VIB_DIM].
 static SemaphoreHandle_t model_mutex  = nullptr;
 
 static EventGroupHandle_t sync_events = nullptr;
@@ -160,7 +160,7 @@ static tflite::ErrorReporter* error_reporter = &micro_error_reporter;
 static tflite::MicroMutableOpResolver<4> resolver;
 static bool resolver_ready = false;
 
-// Stats
+// Bộ đếm thống kê runtime.
 static uint32_t total_wins   = 0;
 static uint32_t silent_wins  = 0;
 static uint32_t alarm_wins   = 0;
@@ -181,19 +181,19 @@ struct MqttPayload {
     bool    over_thr;
     char    mode[8];    // "GENTLE", "STRONG", "SPIN"
 };
-static QueueHandle_t mqtt_queue = nullptr;  // MqttPayload
+static QueueHandle_t mqtt_queue = nullptr;  // Queue chứa MqttPayload.
 
 #define MQTT_HEARTBEAT_SEC  30
 
 static const float FEAT_WEIGHTS[FEAT_DIM] = {
-    1,1,1,1,1,1,1,1,1,1,1,1,1,   // mel
-    5,5,5,5,5,5                   // vib
+    1,1,1,1,1,1,1,1,1,1,1,1,1,   // Đặc trưng Mel.
+    5,5,5,5,5,5                   // Đặc trưng rung.
 };
 
 // ============================================================
-// SECTION 4: ADXL345 & I2S
+// PHẦN 4: ADXL345 VÀ I2S
 // ============================================================
-// Configure ADXL345 measurement mode, range and output data rate.
+// Cấu hình ADXL345: bật chế độ đo, đặt dải đo và tốc độ dữ liệu đầu ra.
 static void adxl_init() {
     Wire.beginTransmission(ADXL_ADDR); Wire.write(0x2D); Wire.write(0x08); Wire.endTransmission();
     Wire.beginTransmission(ADXL_ADDR); Wire.write(0x31); Wire.write(0x00); Wire.endTransmission();
@@ -207,7 +207,7 @@ static void adxl_init() {
     else            Serial.printf("[ADXL] WARN id=0x%02X\n", id);
 }
 
-// Read one raw XYZ sample from ADXL345 data registers.
+// Đọc một mẫu XYZ raw từ các thanh ghi dữ liệu của ADXL345.
 static void adxl_read(int16_t& rx, int16_t& ry, int16_t& rz) {
     Wire.beginTransmission(ADXL_ADDR); Wire.write(0x32); Wire.endTransmission(false);
     Wire.requestFrom(ADXL_ADDR, 6);
@@ -218,7 +218,7 @@ static void adxl_read(int16_t& rx, int16_t& ry, int16_t& rz) {
     rz = (int16_t)((buf[5] << 8) | buf[4]);
 }
 
-// Configure I2S RX for the INMP441 microphone.
+// Cấu hình I2S RX để nhận mẫu âm thanh từ microphone INMP441.
 static void i2s_init() {
     i2s_config_t cfg = {
         .mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -240,9 +240,9 @@ static void i2s_init() {
 }
 
 // ============================================================
-// SECTION 5: SCALING
+// PHẦN 5: CHUẨN HÓA ĐẶC TRƯNG
 // ============================================================
-// Scale one raw 19D feature vector using the scaler of the selected phase.
+// Chuẩn hóa một vector raw 19D bằng scaler tương ứng với pha đã chọn.
 static void apply_scale(const float* raw, float* out, AiMode mode) {
     for (int j = 0; j < MEL_DIM; j++) {
         float v = (raw[j] + 80.0f) / 80.0f;
@@ -273,9 +273,9 @@ static void apply_scale(const float* raw, float* out, AiMode mode) {
 }
 
 // ============================================================
-// SECTION 6: TFLITE MODELS
+// PHẦN 6: MÔ HÌNH TFLITE
 // ============================================================
-// Register the minimal TensorFlow Lite Micro operators used by the Autoencoder.
+// Đăng ký các toán tử TFLite Micro tối thiểu mà Autoencoder cần.
 static void init_resolver() {
     if (resolver_ready) return;
     resolver.AddFullyConnected();
@@ -285,7 +285,7 @@ static void init_resolver() {
     resolver_ready = true;
 }
 
-// Instantiate and allocate tensors for one TFLite Micro model.
+// Khởi tạo interpreter và cấp phát tensor cho một model TFLite Micro.
 static bool load_one_model(const uint8_t* model_data, size_t model_len, uint8_t* arena, size_t arena_size, uint8_t* interp_buf, tflite::MicroInterpreter*& interp_out, const char* name) {
     if (interp_out) { interp_out->~MicroInterpreter(); interp_out = nullptr; }
     const tflite::Model* m = tflite::GetModel(model_data);
@@ -295,7 +295,7 @@ static bool load_one_model(const uint8_t* model_data, size_t model_len, uint8_t*
     return true;
 }
 
-// Load all three phase-specific Autoencoder models.
+// Nạp đủ ba Autoencoder chuyên biệt cho các pha GENTLE, STRONG và SPIN.
 static bool load_models() {
     bool ok = true;
     ok &= load_one_model(model_gentle_tflite, model_gentle_tflite_len, tensor_arena_gentle, TENSOR_ARENA_SIZE, interp_buf_gentle, interp_gentle, "GENTLE");
@@ -304,16 +304,16 @@ static bool load_models() {
     return ok;
 }
 
-// Quantize a normalized float into an int8 tensor value.
+// Lượng tử một giá trị float đã chuẩn hóa sang giá trị tensor int8.
 static int8_t quant(float v, float scale, int32_t zp) { return (int8_t)constrain((int32_t)roundf(v / scale) + zp, -128, 127); }
 
-// Convert an int8 tensor value back to float for MAE calculation.
+// Giải lượng tử một giá trị tensor int8 về float để tính MAE.
 static float dequant(int8_t v, float scale, int32_t zp) { return ((float)v - (float)zp) * scale; }
 
 // ============================================================
-// SECTION 7: CORE 0 AUDIO TASK
+// PHẦN 7: TÁC VỤ ÂM THANH TRÊN LÕI 0
 // ============================================================
-// Core 0 task: capture audio, compute 13 log-Mel features and signal readiness.
+// Tác vụ lõi 0: thu âm thanh, tính 13 log-Mel và báo hiệu audio đã sẵn sàng.
 void audio_task(void*) {
     static float hann[FFT_SIZE];
     for (int i = 0; i < FFT_SIZE; i++) hann[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (FFT_SIZE - 1)));
@@ -380,9 +380,9 @@ void audio_task(void*) {
 }
 
 // ============================================================
-// SECTION 8: CORE 1 VIBRATION TASK
+// PHẦN 8: TÁC VỤ RUNG TRÊN LÕI 1
 // ============================================================
-// Core 1 high-priority task: collect vibration statistics at a stable 1 ms cadence.
+// Tác vụ lõi 1 ưu tiên cao: thu thống kê rung với chu kỳ ổn định 1 ms.
 void vib_task(void*) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(1);
@@ -405,7 +405,7 @@ void vib_task(void*) {
         for (int a = 0; a < 3; a++) {
             float mean = sum[a] / n;
             feat[a*2]   = sqrtf(sq_sum[a] / n);          // RMS
-            feat[a*2+1] = (sq_sum[a] / n) - mean * mean;  // Variance
+            feat[a*2+1] = (sq_sum[a] / n) - mean * mean;  // Phương sai.
         }
 
         if (xQueueSend(vib_queue, feat, 0) != pdTRUE) {
@@ -418,9 +418,9 @@ void vib_task(void*) {
 }
 
 // ============================================================
-// SECTION 9: CORE 1 AI TASK
+// PHẦN 9: TÁC VỤ AI TRÊN LÕI 1
 // ============================================================
-// Core 1 lower-priority task: fuse features, run inference and update alarm state.
+// Tác vụ lõi 1 ưu tiên thấp hơn: ghép đặc trưng, suy luận và cập nhật cảnh báo.
 void ai_task(void*) {
     while (!audio_queue || !vib_queue || !model_mutex || !sync_events) vTaskDelay(10);
     Serial.println("[AI] Ready, waiting for both queues...");
@@ -523,7 +523,7 @@ void ai_task(void*) {
 
         bool over_thr = mae_int8 > thr;
 
-        // Grace period
+        // Khoảng bỏ qua ngắn sau khi thoát idle nếu cần cấu hình.
         if (grace_period_wins > 0) {
             grace_period_wins--;
             over_thr = false;
@@ -532,7 +532,7 @@ void ai_task(void*) {
             continue;
         }
 
-        // Blackbox logger
+        // Ghi log debug: chỉ in vector vào/ra khi cửa sổ vượt ngưỡng.
         if (over_thr) {
             Serial.printf("[FEATURES] IN: ");
             for (int i = 0; i < FEAT_DIM; i++) Serial.printf("%.2f ", fv.scaled[i]);
@@ -595,12 +595,12 @@ void ai_task(void*) {
 }
 
 // ============================================================
-// SECTION 10: MQTT SMART PUBLISH
+// PHẦN 10: GỬI MQTT THÔNG MINH
 // ============================================================
 static uint8_t  mqtt_last_state = 0;
 static uint32_t mqtt_last_send  = 0;
 
-// Publish compact MQTT telemetry only when needed or at heartbeat cadence.
+// Gửi payload MQTT gọn khi đổi trạng thái hoặc tới chu kỳ heartbeat.
 void mqtt_smart_publish() {
     MqttPayload p;
     if (xQueueReceive(mqtt_queue, &p, 0) != pdTRUE) return;
@@ -638,9 +638,9 @@ void mqtt_smart_publish() {
 }
 
 // ============================================================
-// SECTION 11: SETUP & LOOP
+// PHẦN 11: SETUP VÀ LOOP
 // ============================================================
-// Initialize network, sensors, TFLite models and FreeRTOS tasks.
+// Khởi tạo mạng, cảm biến, model TFLite và các task FreeRTOS.
 void setup() {
     Serial.begin(921600);
     delay(500);
@@ -700,7 +700,7 @@ void setup() {
     Serial.println("=== READY FINAL ===");
 }
 
-// Maintain MQTT connectivity and drain the telemetry queue.
+// Duy trì kết nối MQTT và đẩy các payload đang chờ trong queue.
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
         reconnect_mqtt();

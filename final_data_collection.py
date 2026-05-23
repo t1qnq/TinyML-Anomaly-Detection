@@ -1,12 +1,12 @@
-"""Collect synchronized audio and vibration samples from ESP32-S3.
+"""Thu đồng bộ mẫu âm thanh và rung động từ ESP32-S3.
 
-Input stream format:
+Định dạng luồng Serial:
   header  : 0xAA 0xBB
-  payload : 3 x int16 ADXL345 raw values + 8 x int16 audio samples
+  payload : 3 giá trị int16 từ ADXL345 + 8 mẫu int16 âm thanh
 
-Each saved sample contains:
-  - one mono 16-bit WAV file at 8 kHz
-  - one CSV file with X, Y, Z acceleration in g
+Mỗi mẫu được lưu gồm:
+  - một file WAV mono 16-bit ở tần số 8 kHz
+  - một file CSV chứa gia tốc X, Y, Z theo đơn vị g
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ MAX_AUDIO_RMS = 3000.0
 
 
 def read_packet(ser: serial.Serial) -> tuple[int, ...]:
-    """Read one valid packet from the serial stream."""
+    """Đọc một gói hợp lệ từ Serial và trả về tuple giá trị đã giải mã."""
     while True:
         if ser.read(1) != PACKET_HEADER[:1]:
             continue
@@ -58,7 +58,11 @@ def collect_sample(
     ser: serial.Serial,
     duration_sec: int,
 ) -> tuple[list[int], list[list[float]]]:
-    """Collect one sample window from the board."""
+    """Thu một cửa sổ dữ liệu từ board theo thời lượng cấu hình.
+
+    Hàm tích lũy đủ số mẫu audio và số dòng rung cần thiết cho một sample,
+    đồng thời chuyển giá trị ADXL345 từ LSB sang đơn vị g.
+    """
     required_audio = AUDIO_SAMPLE_RATE_HZ * duration_sec
     required_vib = VIB_SAMPLE_RATE_HZ * duration_sec
 
@@ -82,7 +86,11 @@ def collect_sample(
 
 
 def quality_report(audio: list[int], vib: list[list[float]]) -> tuple[bool, list[str], dict[str, float]]:
-    """Return quality warnings and numeric statistics for one sample."""
+    """Kiểm tra chất lượng một sample và trả về cảnh báo kèm thống kê số.
+
+    Các kiểm tra chính gồm trục trọng lực, độ nghiêng tổng thể và mức RMS
+    âm thanh để phát hiện sample quá nhỏ, quá lớn hoặc cảm biến đặt sai hướng.
+    """
     warnings: list[str] = []
     vib_arr = np.asarray(vib, dtype=np.float32)
     audio_arr = np.asarray(audio, dtype=np.float32)
@@ -125,7 +133,7 @@ def quality_report(audio: list[int], vib: list[list[float]]) -> tuple[bool, list
 
 
 def save_sample(out_dir: Path, index: int, audio: list[int], vib: list[list[float]]) -> None:
-    """Save one sample as WAV and CSV."""
+    """Lưu một sample thành cặp file WAV và CSV cùng chỉ số."""
     out_dir.mkdir(parents=True, exist_ok=True)
     wav_path = out_dir / f"sample_{index:04d}.wav"
     csv_path = out_dir / f"sample_{index:04d}.csv"
@@ -140,7 +148,7 @@ def save_sample(out_dir: Path, index: int, audio: list[int], vib: list[list[floa
 
 
 def next_sample_index(out_dir: Path, start_index: int) -> int:
-    """Return the next sample index without overwriting existing files."""
+    """Tìm chỉ số sample kế tiếp để không ghi đè dữ liệu đã thu trước đó."""
     if not out_dir.exists():
         return start_index
     existing = sorted(out_dir.glob("sample_*.wav"))
@@ -151,7 +159,7 @@ def next_sample_index(out_dir: Path, start_index: int) -> int:
 
 
 def print_stats(stats: dict[str, float]) -> None:
-    """Print compact signal-quality statistics for the current sample window."""
+    """In thống kê ngắn gọn phục vụ kiểm tra nhanh chất lượng tín hiệu."""
     print(
         "  vib: "
         f"rms=({stats['rms_x']:.4f}, {stats['rms_y']:.4f}, {stats['rms_z']:.4f})g "
@@ -161,7 +169,7 @@ def print_stats(stats: dict[str, float]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line options for serial data collection."""
+    """Đọc tham số dòng lệnh cho quá trình thu dữ liệu qua Serial."""
     parser = argparse.ArgumentParser(description="Collect ESP32-S3 sensor data")
     parser.add_argument("--port", default="COM5")
     parser.add_argument("--baud", type=int, default=SERIAL_BAUD)
@@ -173,7 +181,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run the collection loop until the requested sample count is reached."""
+    """Mở cổng Serial và lặp thu dữ liệu cho tới khi đủ số sample yêu cầu."""
     args = parse_args()
     out_dir = Path(args.out)
     index = next_sample_index(out_dir, args.start_index)

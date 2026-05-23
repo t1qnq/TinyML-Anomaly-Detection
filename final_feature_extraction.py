@@ -1,7 +1,7 @@
-"""Extract 19-dimensional features from collected WAV/CSV samples.
+"""Trích xuất vector đặc trưng 19 chiều từ các mẫu WAV/CSV đã thu.
 
-Feature layout:
-  0..12 : 13 log-Mel energy bands from INMP441 audio
+Sơ đồ vector đặc trưng:
+  0..12 : 13 dải năng lượng log-Mel từ âm thanh INMP441
   13    : rms_x
   14    : var_x
   15    : rms_y
@@ -9,9 +9,8 @@ Feature layout:
   17    : rms_z
   18    : var_z
 
-The audio path intentionally matches the firmware implementation:
-512-point FFT, 256-sample hop, 30 frames per one-second window and the
-same fixed triangular Mel filterbank.
+Nhánh xử lý âm thanh được giữ khớp firmware: FFT 512 điểm, hop 256 mẫu,
+30 frame trong mỗi cửa sổ 1 giây và cùng bộ lọc Mel tam giác cố định.
 """
 
 from __future__ import annotations
@@ -40,9 +39,9 @@ VIB_ROWS_PER_WINDOW = 1000
 
 AUDIO_SAMPLES_PER_WINDOW = AUDIO_SAMPLE_RATE_HZ * WINDOW_SECONDS
 
-# These caps are part of the feature pipeline used to create train_features_v6.csv.
-# They limit rare vibration spikes before the row is saved, keeping the extractor
-# consistent with the data distribution documented in latex_v2.
+# Các ngưỡng clip này thuộc pipeline tạo train_features_v6.csv.
+# Mục đích là giới hạn một số xung rung hiếm trước khi lưu feature,
+# nhờ đó extractor giữ đúng phân phối dữ liệu đã báo cáo trong latex_v2.
 VIB_CLIP_RMS_Z = 0.30
 VIB_CLIP_VAR_X = 0.001097
 VIB_CLIP_VAR_Y = 0.000978
@@ -66,7 +65,7 @@ MEL_FILTERBANK = (
 
 
 def read_wav_int16_mono(path: str | Path, expected_sr: int = AUDIO_SAMPLE_RATE_HZ) -> np.ndarray:
-    """Read a mono 16-bit PCM WAV file and keep the original int16 scale."""
+    """Đọc WAV mono PCM 16-bit và giữ nguyên thang giá trị int16."""
     with wave.open(str(path), "rb") as wf:
         channels = wf.getnchannels()
         sample_width = wf.getsampwidth()
@@ -83,7 +82,7 @@ def read_wav_int16_mono(path: str | Path, expected_sr: int = AUDIO_SAMPLE_RATE_H
 
 
 def hann_window(n: int) -> np.ndarray:
-    """Build the same Hann analysis window used before each FFT frame."""
+    """Tạo cửa sổ Hann giống firmware để nhân trước mỗi frame FFT."""
     i = np.arange(n, dtype=np.float32)
     return 0.5 * (1.0 - np.cos(2.0 * np.pi * i / (n - 1)))
 
@@ -92,7 +91,7 @@ HANN_512 = hann_window(N_FFT)
 
 
 def frame_audio_window(segment: np.ndarray) -> np.ndarray:
-    """Create 30 firmware-compatible frames from one second of audio."""
+    """Chia một giây audio thành 30 frame theo đúng cách firmware xử lý."""
     prev = np.zeros(HOP_LENGTH, dtype=np.float32)
     frames = np.empty((NUM_FRAMES, N_FFT), dtype=np.float32)
     for frame_idx in range(NUM_FRAMES):
@@ -107,7 +106,7 @@ def frame_audio_window(segment: np.ndarray) -> np.ndarray:
 
 
 def mel_power_from_rfft(rfft: np.ndarray) -> np.ndarray:
-    """Apply the fixed firmware Mel filterbank to one FFT spectrum."""
+    """Áp dụng bộ lọc Mel cố định của firmware lên một phổ FFT."""
     power = (rfft.real.astype(np.float32) ** 2) + (rfft.imag.astype(np.float32) ** 2)
     if len(power) > 2:
         power[1:-1] *= 2.0
@@ -128,7 +127,7 @@ def mel_power_from_rfft(rfft: np.ndarray) -> np.ndarray:
 
 
 def mel_features(segment: np.ndarray) -> np.ndarray:
-    """Return 13 mean log-Mel features for one one-second audio segment."""
+    """Tính 13 đặc trưng log-Mel trung bình cho một đoạn audio 1 giây."""
     frames = frame_audio_window(segment) * HANN_512[None, :]
     powers = np.empty((NUM_FRAMES, N_MELS), dtype=np.float32)
     max_power = 0.0
@@ -146,22 +145,22 @@ def mel_features(segment: np.ndarray) -> np.ndarray:
 
 
 def vibration_features(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Return clipped RMS/variance features for the three ADXL345 axes.
+    """Tính 6 đặc trưng RMS/phương sai đã clip cho ba trục ADXL345.
 
-    The ordering and clipping match the extractor used before the final cleanup:
-    [rms_x, var_x, rms_y, var_y, rms_z, var_z]. The fixed caps prevent a small
-    number of sensor spikes from dominating phase routing and scaler fitting.
+    Thứ tự đầu ra là [rms_x, var_x, rms_y, var_y, rms_z, var_z]. Các ngưỡng
+    clip cố định giúp một vài xung cảm biến hiếm không chi phối phân pha và
+    quá trình fit scaler trong pipeline huấn luyện.
     """
     x = x.astype(np.float32, copy=False)
     y = y.astype(np.float32, copy=False)
     z = z.astype(np.float32, copy=False)
 
     def rms(values: np.ndarray) -> float:
-        """Compute root-mean-square acceleration for one axis."""
+        """Tính gia tốc RMS cho một trục."""
         return float(np.sqrt(np.mean(values * values)))
 
     def var(values: np.ndarray) -> float:
-        """Compute acceleration variance for one axis."""
+        """Tính phương sai gia tốc cho một trục."""
         return float(np.var(values))
 
     features = np.array(
@@ -176,7 +175,7 @@ def vibration_features(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarra
 
 
 def extract_file(wav_path: str | Path, csv_path: str | Path) -> tuple[list[np.ndarray], str | None]:
-    """Extract five one-second feature rows from a matched WAV/CSV pair."""
+    """Trích xuất 5 vector 1 giây từ một cặp file WAV/CSV tương ứng."""
     audio = read_wav_int16_mono(wav_path)
     vib_df = pd.read_csv(csv_path, usecols=["X", "Y", "Z"], dtype=np.float32)
 
@@ -209,7 +208,7 @@ def extract_file(wav_path: str | Path, csv_path: str | Path) -> tuple[list[np.nd
 
 
 def feature_columns() -> list[str]:
-    """Return the fixed 19-column schema used by training and firmware."""
+    """Trả về schema 19 cột cố định dùng chung cho training và firmware."""
     return [f"mfe_{idx}" for idx in range(N_MELS)] + [
         "rms_x",
         "var_x",
@@ -221,7 +220,7 @@ def feature_columns() -> list[str]:
 
 
 def print_summary(df: pd.DataFrame) -> None:
-    """Print descriptive statistics to detect bad feature ranges early."""
+    """In thống kê mô tả để phát hiện sớm feature nằm ngoài miền kỳ vọng."""
     mel_cols = [f"mfe_{idx}" for idx in range(N_MELS)]
     vib_cols = ["rms_x", "var_x", "rms_y", "var_y", "rms_z", "var_z"]
 
@@ -233,7 +232,7 @@ def print_summary(df: pd.DataFrame) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line options for batch feature extraction."""
+    """Đọc tham số dòng lệnh cho quá trình trích xuất feature hàng loạt."""
     parser = argparse.ArgumentParser(description="Extract TinyML training features")
     parser.add_argument("--data-dir", "--data_dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--out", default=DEFAULT_OUT_CSV)
@@ -242,7 +241,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Convert all collected sample pairs into the training feature CSV."""
+    """Chuyển toàn bộ cặp WAV/CSV đã thu thành file CSV feature huấn luyện."""
     args = parse_args()
     wav_files = sorted(glob.glob(os.path.join(args.data_dir, "*.wav")))
     if args.limit_files > 0:

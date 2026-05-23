@@ -14,19 +14,19 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:fl_chart/fl_chart.dart';
 
 // ─────────────────────────────────────────────
-// CONSTANTS
+// HẰNG SỐ
 // ─────────────────────────────────────────────
 const String kBroker = AppConfig.broker;
 const String kTopic = AppConfig.topic;
 const int    kPort = AppConfig.port;
-const int    kHeartbeatTimeout = 60; // seconds
-const int    kAlarmWindow      = 10;  // sliding window size
-const int    kAlarmEnterThr    = 5;   // 5/10 HIGH -> ALARM
-const int    kAlarmExitThr     = 1;   // <=1/10 HIGH means 9 OK -> exit
+const int    kHeartbeatTimeout = 60; // Đơn vị giây.
+const int    kAlarmWindow      = 10; // Kích thước cửa sổ trượt.
+const int    kAlarmEnterThr    = 5;  // 5/10 mẫu HIGH thì vào ALARM.
+const int    kAlarmExitThr     = 1;  // <=1/10 mẫu HIGH nghĩa là 9 OK thì thoát.
 const int    kMaxMaeHistory    = 40;
 const int    kMaxHistory       = 30;
 
-// MAE thresholds per mode. Keep these values aligned with model_data_final.h.
+// Ngưỡng MAE theo từng pha; luôn giữ khớp với model_data_final.h.
 const Map<String, double> kThresholds = {
   'GENTLE': 0.0469,
   'STRONG': 0.1077,
@@ -34,7 +34,7 @@ const Map<String, double> kThresholds = {
 };
 
 // ─────────────────────────────────────────────
-// MODELS
+// MÔ HÌNH DỮ LIỆU
 // ─────────────────────────────────────────────
 enum MachineStatus { waiting, ok, high, alarm, deviceLost }
 enum WashMode { gentle, strong, spin, unknown }
@@ -66,7 +66,7 @@ extension WashModeX on WashMode {
   }
 }
 
-// Convert the firmware MQTT mode string into the app enum.
+// Chuyển chuỗi mode từ payload MQTT của firmware sang enum trong app.
 WashMode parseModeFromString(String? s) {
   switch (s?.toUpperCase()) {
     case 'GENTLE': return WashMode.gentle;
@@ -97,12 +97,12 @@ class AlarmEvent {
 }
 
 // ─────────────────────────────────────────────
-// NOTIFICATIONS
+// THÔNG BÁO
 // ─────────────────────────────────────────────
 final FlutterLocalNotificationsPlugin _notifPlugin =
     FlutterLocalNotificationsPlugin();
 
-// Initialize the local notification channel used for alarm alerts.
+// Khởi tạo kênh thông báo local dùng khi hệ thống chuyển sang ALARM.
 Future<void> initNotifications() async {
   const android = AndroidInitializationSettings('@mipmap/ic_launcher');
   await _notifPlugin.initialize(
@@ -114,7 +114,7 @@ Future<void> initNotifications() async {
       ?.requestNotificationsPermission();
 }
 
-// Show a high-priority notification when the firmware reports ALARM.
+// Hiển thị thông báo ưu tiên cao khi firmware báo trạng thái ALARM.
 Future<void> showAlarmNotification(double mae) async {
   const details = AndroidNotificationDetails(
     'alarm_channel', 'Cảnh báo rung lắc',
@@ -133,7 +133,7 @@ Future<void> showAlarmNotification(double mae) async {
 }
 
 // ─────────────────────────────────────────────
-// MAIN
+// ĐIỂM VÀO ỨNG DỤNG
 // ─────────────────────────────────────────────
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -150,7 +150,7 @@ void main() async {
 }
 
 // ─────────────────────────────────────────────
-// APP ROOT
+// GỐC ỨNG DỤNG
 // ─────────────────────────────────────────────
 class TinyMLApp extends StatelessWidget {
   const TinyMLApp({super.key});
@@ -179,7 +179,7 @@ class TinyMLApp extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// MONITOR SCREEN
+// MÀN HÌNH GIÁM SÁT
 // ─────────────────────────────────────────────
 class MonitorScreen extends StatefulWidget {
   const MonitorScreen({super.key});
@@ -190,10 +190,10 @@ class MonitorScreen extends StatefulWidget {
 
 class _MonitorScreenStateV2 extends State<MonitorScreen>
     with TickerProviderStateMixin {
-  // MQTT
+  // Đối tượng kết nối MQTT.
   MqttClient? _client;
 
-  // State
+  // Trạng thái hiện tại của hệ thống.
   MachineStatus _status         = MachineStatus.waiting;
   WashMode      _mode           = WashMode.unknown;
   bool          _isConnected    = false;
@@ -201,18 +201,18 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
   int           _currentWin     = 0;
   int           _currentConsec  = 0;
 
-  // Stats (non-final for hot-reload resilience)
+  // Thống kê thời gian chạy; không dùng final để tiện tải nóng khi demo.
   int _totalWins = 0;
   int _alarmCount = 0;
   DateTime? _connectedAt;
 
-  // History
+  // Lịch sử MAE, pha và sự kiện cảnh báo.
   final List<AlarmEvent> _events = [];
   final List<double> _maeHistory = [];
   final List<WashMode> _modeHistory = [];
   final List<int> _uptimeSegs = [];
 
-  // Phase counters
+  // Bộ đếm số window và số alarm theo từng pha.
   final Map<WashMode, int> _phaseCount = {
     WashMode.gentle: 0,
     WashMode.strong: 0,
@@ -229,14 +229,14 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     WashMode.spin: 0.0,
   };
 
-  // Heartbeat
+  // Bộ theo dõi nhịp sống để phát hiện mất kết nối thiết bị.
   Timer? _heartbeatTimer;
   Timer? _clockTimer;
 
   // Tab
   int _tabIndex = 0;
 
-  // Alarm animation
+  // Hiệu ứng chuyển động dùng khi hiển thị trạng thái cảnh báo.
   late AnimationController _alarmAnim;
   late Animation<double>   _alarmGlow;
 
@@ -253,7 +253,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
       CurvedAnimation(parent: _alarmAnim, curve: Curves.easeInOut),
     );
 
-    // Refresh the statistics tab once per second while connected.
+    // Làm mới tab thống kê mỗi giây trong lúc đang kết nối.
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _tabIndex == 2 && _isConnected) {
         setState(() {}); 
@@ -272,7 +272,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     super.dispose();
   }
 
-  // ── HEARTBEAT WATCHDOG ──────────────────────
+  // ── THEO DÕI NHỊP SỐNG THIẾT BỊ ────────────
   void _resetHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer(
@@ -284,14 +284,14 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── MQTT ────────────────────────────────────
+  // ── KẾT NỐI MQTT ────────────────────────────
   Future<void> _connectMQTT() async {
     final clientID = 'quang_wm_${DateTime.now().millisecondsSinceEpoch}';
     
     _client = mqtt_factory.createMqttClient(kBroker, clientID, kPort);
 
     _client!.logging(on: true); 
-    _client!.setProtocolV311(); // CHÚ Ý: Bắt buộc ép chạy chuẩn 3.1.1 với HiveMQ
+    _client!.setProtocolV311(); // Bắt buộc ép chuẩn 3.1.1 để tương thích HiveMQ.
     _client!.keepAlivePeriod = 20;
     _client!.autoReconnect   = true;
 
@@ -351,7 +351,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     }
   }
 
-  // ── PARSE MQTT PAYLOAD ──────────────────────
+  // ── PHÂN TÍCH PAYLOAD MQTT ──────────────────
   void _parseData(String payload) {
     debugPrint('👉 RAW MQTT NHẬN ĐƯỢC: $payload');
     try {
@@ -375,7 +375,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
         _currentConsec = consec;
         _currentMae    = mae;
 
-        // MAE history + mode history (luôn đồng bộ 1:1)
+        // Lịch sử MAE và lịch sử pha luôn đồng bộ 1:1 theo từng payload.
         _maeHistory.add(mae);
         _modeHistory.add(resolvedMode);
         if (_maeHistory.length > kMaxMaeHistory) {
@@ -383,7 +383,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
           _modeHistory.removeAt(0);
         }
 
-        // Mode
+        // Cập nhật bộ đếm pha hiện tại.
         if (resolvedMode != WashMode.unknown) {
            _mode = resolvedMode; 
            _phaseCount[resolvedMode] = (_phaseCount[resolvedMode] ?? 0) + 1;
@@ -433,13 +433,13 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     }
   }
 
-  // Append one alarm/status event and keep the history list bounded.
+  // Thêm một sự kiện trạng thái/cảnh báo và giới hạn độ dài lịch sử.
   void _addEvent(AlarmEvent e) {
     _events.insert(0, e);
     if (_events.length > kMaxHistory) _events.removeLast();
   }
 
-  // ── FIRESTORE ───────────────────────────────
+  // ── GHI FIRESTORE ───────────────────────────
   Future<void> _saveToFirestore(
     double mae, int win, int consec, {required bool isAlarm}
   ) async {
@@ -458,7 +458,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
   }
 
   // ─────────────────────────────────────────────
-  // BUILD
+  // XÂY DỰNG GIAO DIỆN
   // ─────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -474,7 +474,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── HEADER ──────────────────────────────────
+  // ── PHẦN ĐẦU TRANG ──────────────────────────
   Widget _buildHeader() {
     final (color, text) = switch (_status) {
       MachineStatus.deviceLost => (const Color(0xFFFF4C6A), 'DEVICE LOST'),
@@ -550,7 +550,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── BODY ────────────────────────────────────
+  // ── NỘI DUNG THEO TAB ───────────────────────
   Widget _buildBody() {
     return switch (_tabIndex) {
       1     => _ChartTab(maeHistory: _maeHistory, modeHistory: _modeHistory, mode: _mode, phaseCount: _phaseCount, totalWins: _totalWins),
@@ -565,7 +565,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     };
   }
 
-  // ── MONITOR TAB ─────────────────────────────
+  // ── TAB GIÁM SÁT ───────────────────────────
   Widget _buildMonitorTab() {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -575,7 +575,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
         _buildModeBadge(),
         const SizedBox(height: 20),
 
-        // Heartbeat warning
+        // Cảnh báo khi không nhận heartbeat trong thời gian dài.
         if (_status == MachineStatus.deviceLost) ...[
           _InfoBanner(
             color: const Color(0xFFF5A623),
@@ -585,19 +585,19 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
           const SizedBox(height: 12),
         ],
 
-        // Alarm detail card
+        // Thẻ chi tiết khi hệ thống đang ở trạng thái ALARM.
         if (_status == MachineStatus.alarm) ...[
           _buildAlarmCard(),
           const SizedBox(height: 16),
         ],
 
-        // Phase row
+        // Hàng hiển thị ba pha vận hành.
         _SectionHeader(title: 'Pha giặt'),
         const SizedBox(height: 10),
         _buildPhaseRow(),
         const SizedBox(height: 20),
 
-        // History
+        // Danh sách lịch sử sự kiện gần nhất.
         _SectionHeader(title: 'Lịch sử sự kiện'),
         const SizedBox(height: 10),
         _buildHistory(),
@@ -605,7 +605,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── STATUS RING ─────────────────────────────
+  // ── VÒNG TRẠNG THÁI ─────────────────────────
   Widget _buildStatusRing() {
     final (color, icon, label) = switch (_status) {
       MachineStatus.ok         => (const Color(0xFF22D9A0), '✓', 'OK'),
@@ -662,7 +662,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── MODE BADGE ──────────────────────────────
+  // ── NHÃN PHA HIỆN TẠI ───────────────────────
   Widget _buildModeBadge() {
     return Center(
       child: Container(
@@ -697,7 +697,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── ALARM CARD ──────────────────────────────
+  // ── THẺ CẢNH BÁO ────────────────────────────
   Widget _buildAlarmCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -745,7 +745,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // Mark the current alarm events as acknowledged in the local UI.
+  // Đánh dấu các sự kiện ALARM hiện tại là đã xác nhận trên UI local.
   void _acknowledgeAlarm() {
     final idx = _events.indexWhere(
         (e) => e.isAlarm && e.win == _currentWin);
@@ -764,7 +764,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // ── PHASE ROW ───────────────────────────────
+  // ── HÀNG PHA GIẶT ───────────────────────────
   Widget _buildPhaseRow() {
     return Row(children: [
       _PhaseCell(mode: WashMode.gentle, isActive: _mode == WashMode.gentle),
@@ -775,7 +775,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     ]);
   }
 
-  // ── HISTORY ─────────────────────────────────
+  // ── LỊCH SỬ SỰ KIỆN ─────────────────────────
   Widget _buildHistory() {
     if (_events.isEmpty) {
       return Container(
@@ -792,7 +792,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
-  // Render one row in the recent event history list.
+  // Vẽ một dòng trong danh sách lịch sử sự kiện gần nhất.
   Widget _buildHistoryItem(AlarmEvent e) {
     final color = e.isAlarm ? const Color(0xFFFF4C6A) : const Color(0xFF22D9A0);
     final icon  = e.isAlarm ? '⚡' : '✓';
@@ -850,7 +850,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
 }
 
 // ─────────────────────────────────────────────
-// CHART TAB
+// TAB BIỂU ĐỒ
 // ─────────────────────────────────────────────
 class _ChartTab extends StatelessWidget {
   final List<double> maeHistory;
@@ -873,7 +873,7 @@ class _ChartTab extends StatelessWidget {
         _SectionHeader(title: 'MAE theo thời gian (${maeHistory.length} điểm)'),
         const SizedBox(height: 12),
 
-        // Legend
+        // Chú giải đường ngưỡng theo từng pha.
         Wrap(
           spacing: 16,
           runSpacing: 10,
@@ -982,7 +982,7 @@ class _ChartTab extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// STATS TAB
+// TAB THỐNG KÊ
 // ─────────────────────────────────────────────
 class _StatsTab extends StatelessWidget {
   final int totalWins;
@@ -1008,7 +1008,7 @@ class _StatsTab extends StatelessWidget {
     return '${m}m ${s}s';
   }
 
-  // Calculate the average MAE for one washing phase from local history.
+  // Tính MAE trung bình của một pha từ lịch sử đang lưu trong app.
   String _calcAvgMae(WashMode mode) {
     if (phaseCount == null || phaseMaeSum == null) return '—';
     final count = phaseCount![mode] ?? 0;
@@ -1017,7 +1017,7 @@ class _StatsTab extends StatelessWidget {
     return (sum / count).toStringAsFixed(4);
   }
 
-  // Calculate the alarm ratio for one phase from local counters.
+  // Tính tỷ lệ alarm của một pha dựa trên các bộ đếm local.
   String _calcAlarmRate(WashMode mode) {
     if (phaseCount == null || phaseAlarmCount == null) return '0.0%';
     final count = phaseCount![mode] ?? 0;
@@ -1040,7 +1040,7 @@ class _StatsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        // Stat cards grid
+        // Lưới thẻ thống kê tổng quan.
         IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1098,7 +1098,7 @@ class _StatsTab extends StatelessWidget {
 
         const SizedBox(height: 20),
 
-        // Uptime bar — 500 phân đoạn, 10 dòng (50/dòng)
+        // Thanh thời gian hoạt động: tối đa 500 phân đoạn, 10 dòng (50/dòng).
         _SectionHeader(title: 'Trạng thái theo thời gian (${segs.length} phân đoạn)'),
         const SizedBox(height: 10),
         Container(
@@ -1147,7 +1147,7 @@ class _StatsTab extends StatelessWidget {
 
 
         
-        // Technical Indicators
+        // Thông số kỹ thuật khớp với firmware và latex_v2.
         _SectionHeader(title: 'Thông số kỹ thuật (V2)'),
         const SizedBox(height: 12),
         _buildTechInfo(label: 'Kiến trúc', value: 'Symmetric Autoencoder'),
@@ -1162,7 +1162,7 @@ class _StatsTab extends StatelessWidget {
     );
   }
 
-  // Render one key-value row in the technical information section.
+  // Vẽ một dòng key-value trong phần thông số kỹ thuật.
   Widget _buildTechInfo({required String label, required String value}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
@@ -1176,7 +1176,7 @@ class _StatsTab extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// SMALL WIDGETS
+// CÁC WIDGET NHỎ TÁI SỬ DỤNG
 // ─────────────────────────────────────────────
 class _ConnBadge extends StatelessWidget {
   final Color color;

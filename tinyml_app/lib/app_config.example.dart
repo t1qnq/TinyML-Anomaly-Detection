@@ -1,6 +1,6 @@
 class AppConfig {
-  // Copy this file to app_config.dart or run tools/generate_env_config.py.
-  // Do not commit real MQTT credentials.
+  // Sao chép file này thành app_config.dart hoặc chạy tools/generate_env_config.py.
+  // Không commit thông tin đăng nhập MQTT thật lên Git.
   static const broker = '';
   static const topic = 'tinyml/quang_wm_2026/status';
   static const port = 8883;

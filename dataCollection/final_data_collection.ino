@@ -1,5 +1,5 @@
-// TinyML washing-machine data collector for XIAO ESP32-S3.
-// Streams synchronized INMP441 audio and ADXL345 vibration packets over Serial.
+// Firmware thu dữ liệu máy giặt cho XIAO ESP32-S3.
+// Gửi các gói âm thanh INMP441 và rung ADXL345 đã đồng bộ qua Serial.
 
 #include <Wire.h>
 #include <WiFi.h>
@@ -18,9 +18,9 @@
 #define AUDIO_CHUNK_SIZE  8
 
 struct __attribute__((packed)) SensorPacket {
-    uint16_t header;                 // 0xBBAA appears as AA BB on the wire.
-    int16_t ax, ay, az;              // ADXL345 raw value; divide by 256.0 to get g.
-    int16_t audio[AUDIO_CHUNK_SIZE]; // High-pass filtered INMP441 PCM samples.
+    uint16_t header;                 // 0xBBAA sẽ xuất hiện trên dây dưới dạng AA BB.
+    int16_t ax, ay, az;              // Giá trị raw ADXL345; chia 256.0 để đổi sang g.
+    int16_t audio[AUDIO_CHUNK_SIZE]; // Mẫu PCM INMP441 sau lọc thông cao.
 };
 
 static SensorPacket packet;
@@ -28,7 +28,7 @@ static QueueHandle_t packet_queue = nullptr;
 static int32_t hpf_prev_x = 0;
 static int32_t hpf_prev_y = 0;
 
-// Remove microphone DC offset before sending samples to the host.
+// Loại bỏ lệch DC của microphone trước khi gửi mẫu về máy tính.
 static int16_t high_pass_filter(int16_t x) {
     int32_t cx = (int32_t)x;
     int32_t cy = (243 * (hpf_prev_y + cx - hpf_prev_x)) >> 8;
@@ -37,7 +37,7 @@ static int16_t high_pass_filter(int16_t x) {
     return (int16_t)cy;
 }
 
-// Read one raw XYZ acceleration sample from ADXL345.
+// Đọc một mẫu gia tốc XYZ raw từ thanh ghi dữ liệu của ADXL345.
 static void read_adxl_raw(int16_t &x, int16_t &y, int16_t &z) {
     Wire.beginTransmission(ADXL345_ADDR);
     Wire.write(0x32);
@@ -53,7 +53,7 @@ static void read_adxl_raw(int16_t &x, int16_t &y, int16_t &z) {
     }
 }
 
-// Put ADXL345 into measurement mode with the project data-rate/range settings.
+// Cấu hình ADXL345 ở chế độ đo với dải đo và tốc độ dữ liệu của đồ án.
 static void setup_adxl345() {
     Wire.beginTransmission(ADXL345_ADDR);
     Wire.write(0x2D);
@@ -62,12 +62,12 @@ static void setup_adxl345() {
 
     Wire.beginTransmission(ADXL345_ADDR);
     Wire.write(0x31);
-    Wire.write(0x00); // +/-2g, 10-bit mode.
+    Wire.write(0x00); // Dải +/-2g, chế độ 10-bit.
     Wire.endTransmission();
 
     Wire.beginTransmission(ADXL345_ADDR);
     Wire.write(0x2C);
-    Wire.write(0x0B); // 200 Hz ODR.
+    Wire.write(0x0B); // ODR 200 Hz.
     Wire.endTransmission();
 
     Wire.beginTransmission(ADXL345_ADDR);
@@ -83,7 +83,7 @@ static void setup_adxl345() {
     }
 }
 
-// Configure I2S RX for streaming INMP441 microphone samples.
+// Cấu hình I2S RX để nhận luồng mẫu từ microphone INMP441.
 static void setup_i2s() {
     i2s_config_t cfg = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -107,7 +107,7 @@ static void setup_i2s() {
     Serial.println("[I2S] OK");
 }
 
-// Capture task: sample ADXL345 and INMP441, then pack frames for serial output.
+// Task thu dữ liệu: đọc ADXL345/INMP441 rồi đóng gói frame để gửi Serial.
 static void capture_task(void*) {
     int32_t raw_i2s[AUDIO_CHUNK_SIZE];
     size_t bytes_read = 0;
@@ -151,7 +151,7 @@ static void capture_task(void*) {
     }
 }
 
-// Serial task: transmit binary packets to final_data_collection.py.
+// Task Serial: truyền gói nhị phân sang `final_data_collection.py`.
 static void serial_task(void*) {
     SensorPacket out;
     while (true) {
@@ -161,7 +161,7 @@ static void serial_task(void*) {
     }
 }
 
-// Initialize sensors, queues and the two FreeRTOS collection tasks.
+// Khởi tạo cảm biến, queue và hai task FreeRTOS phục vụ thu dữ liệu.
 void setup() {
     Serial.begin(SERIAL_BAUD);
     delay(500);
@@ -183,7 +183,7 @@ void setup() {
     xTaskCreatePinnedToCore(serial_task, "SERIAL", 4096, NULL, 5, NULL, 1);
 }
 
-// All work runs in tasks; the Arduino loop only yields CPU time.
+// Toàn bộ xử lý chạy trong task; vòng lặp Arduino chỉ nhường CPU.
 void loop() {
     vTaskDelete(NULL);
 }
