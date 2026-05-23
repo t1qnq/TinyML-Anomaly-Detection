@@ -684,4 +684,9 @@ Các file trên là dữ liệu cục bộ hoặc artifact sinh ra trong quá tr
 ## Tác giả
 
 Quách Ngọc Quang<br>
-Đồ án tốt nghiệp định hướng TinyML, Edge AI và AIoT cho giám sát bất thường máy giặt dân dụng.
+Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên.
+
+## Giảng viên hướng dẫn
+
+Cán bộ hướng dẫn: TS. Nguyễn Kiêm Hùng
+Cán bộ đồng hướng dẫn: TS. Mai Linh
