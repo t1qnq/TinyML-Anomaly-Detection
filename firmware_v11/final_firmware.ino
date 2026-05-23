@@ -183,7 +183,7 @@ struct MqttPayload {
 };
 static QueueHandle_t mqtt_queue = nullptr;  // Queue chứa MqttPayload.
 
-#define MQTT_HEARTBEAT_SEC  30
+#define MQTT_PUBLISH_INTERVAL_MS  1000UL
 
 static const float FEAT_WEIGHTS[FEAT_DIM] = {
     1,1,1,1,1,1,1,1,1,1,1,1,1,   // Đặc trưng Mel.
@@ -600,7 +600,7 @@ void ai_task(void*) {
 static uint8_t  mqtt_last_state = 0;
 static uint32_t mqtt_last_send  = 0;
 
-// Gửi payload MQTT gọn khi đổi trạng thái hoặc tới chu kỳ heartbeat.
+// Gửi payload MQTT gọn khi đổi trạng thái hoặc tới chu kỳ định kỳ 1 giây.
 void mqtt_smart_publish() {
     MqttPayload p;
     if (xQueueReceive(mqtt_queue, &p, 0) != pdTRUE) return;
@@ -611,7 +611,7 @@ void mqtt_smart_publish() {
     bool     changed   = (cur_state != mqtt_last_state);
     bool     should_send = false;
 
-    if (changed || (now - mqtt_last_send >= 1000UL)) {
+    if (changed || (now - mqtt_last_send >= MQTT_PUBLISH_INTERVAL_MS)) {
         should_send = true;
         if (changed) {
             const char* names[] = {"OK", "HIGH", "ALARM"};
