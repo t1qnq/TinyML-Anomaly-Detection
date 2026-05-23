@@ -1,4 +1,4 @@
-# Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên
+# TinyML Washing Machine Anomaly Detection
 
 ![Hardware](https://img.shields.io/badge/Hardware-XIAO_ESP32S3-blue?style=flat-square&logo=espressif)
 ![AI](https://img.shields.io/badge/AI-TFLite_Micro-orange?style=flat-square&logo=tensorflow)
@@ -6,36 +6,64 @@
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python)
 ![Firmware](https://img.shields.io/badge/Firmware-Arduino_C%2B%2B-00599C?style=flat-square&logo=arduino)
 
-Hệ thống Edge AI/TinyML giám sát trạng thái máy giặt theo thời gian thực. Thiết bị dùng microphone INMP441 và cảm biến rung ADXL345 để tạo vector đặc trưng 19 chiều, chạy Autoencoder INT8 trực tiếp trên Seeed Studio XIAO ESP32-S3, sau đó gửi trạng thái qua MQTT cho ứng dụng Flutter hiển thị.
+Source code cuối cho đồ án:
+
+> **Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên**
+
+Hệ thống thu đồng thời âm thanh từ microphone INMP441 và rung động từ cảm biến ADXL345, trích xuất vector đặc trưng 19 chiều, định tuyến theo ba pha vận hành `GENTLE`, `STRONG`, `SPIN`, sau đó chạy Autoencoder INT8 trực tiếp trên Seeed Studio XIAO ESP32-S3. Kết quả suy luận được gửi qua MQTT để ứng dụng Flutter hiển thị trạng thái, lịch sử cảnh báo và đồ thị MAE gần thời gian thực.
 
 ## Mục lục
 
 - [Tổng quan](#tổng-quan)
+- [Kết quả final](#kết-quả-final)
 - [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
 - [Cấu trúc mã nguồn](#cấu-trúc-mã-nguồn)
 - [Phần cứng](#phần-cứng)
 - [Phần mềm cần cài](#phần-mềm-cần-cài)
 - [Cấu hình bảo mật](#cấu-hình-bảo-mật)
-- [Quy trình sử dụng đầy đủ](#quy-trình-sử-dụng-đầy-đủ)
-- [Chạy ứng dụng Flutter](#chạy-ứng-dụng-flutter)
+- [Quy trình tái lập](#quy-trình-tái-lập)
+- [Firmware runtime](#firmware-runtime)
+- [Ứng dụng Flutter](#ứng-dụng-flutter)
 - [Payload MQTT](#payload-mqtt)
-- [Kiểm tra chất lượng trước khi push](#kiểm-tra-chất-lượng-trước-khi-push)
-- [Xử lý lỗi thường gặp](#xử-lý-lỗi-thường-gặp)
+- [Kiểm tra trước khi nộp hoặc push](#kiểm-tra-trước-khi-nộp-hoặc-push)
+- [Lỗi thường gặp](#lỗi-thường-gặp)
+- [Ghi chú artifact](#ghi-chú-artifact)
 
 ## Tổng quan
 
-Bài toán của dự án là phát hiện bất thường của máy giặt dân dụng bằng mô hình học không giám sát chạy trực tiếp trên vi điều khiển. Thay vì gửi toàn bộ âm thanh/rung động lên cloud, hệ thống chỉ gửi kết quả đã suy luận: trạng thái `OK`, `HIGH`, `ALARM`, giá trị MAE, pha vận hành và các bộ đếm thống kê.
+Bài toán của dự án là phát hiện bất thường trên máy giặt dân dụng trong điều kiện thiếu dữ liệu lỗi có nhãn. Hệ thống dùng học không giám sát: Autoencoder học phân phối dữ liệu bình thường, sau đó phát hiện bất thường bằng sai số tái tạo MAE.
 
-Các điểm chính của bản `fix-v2`:
+Các quyết định thiết kế chính:
 
-- Tách bộ source cuối thành các file `final_*`, không phụ thuộc vào file legacy.
-- Huấn luyện theo pipeline leakage-free: chia train/validation/test trước augmentation.
-- Tích hợp K-Means để tính ngưỡng chuyển pha từ `var_z` trong `final_training.py`.
-- Không hardcode Wi-Fi/MQTT credential trong firmware hoặc Flutter app.
-- Firmware runtime chạy dual-core:
-  - Core 0 xử lý audio I2S, FFT và 13 log-Mel.
-  - Core 1 xử lý rung, định tuyến pha, suy luận Autoencoder và publish MQTT.
-- Flutter app theo dõi realtime qua MQTT và hiển thị monitor, chart, thống kê.
+- Xử lý tại biên, không truyền liên tục dữ liệu âm thanh hoặc rung động thô lên cloud.
+- Dùng đặc trưng đa cảm biến: 13 log-Mel audio + 6 đặc trưng rung động.
+- Tách ba mô hình Autoencoder theo pha vận hành để giảm nhầm lẫn giữa chuyển pha bình thường và bất thường thật.
+- Lượng tử hóa INT8 để chạy bằng TensorFlow Lite for Microcontrollers trên ESP32-S3.
+- Gửi kết quả qua MQTT, lưu lịch sử bằng Firebase Firestore và hiển thị bằng Flutter.
+
+## Kết quả final
+
+Kết quả đánh giá offline trên tập hold-out của phiên bản final:
+
+| Pha | Threshold MAE | F1-Score | Precision | Recall | AUC |
+|---|---:|---:|---:|---:|---:|
+| `GENTLE` | `0.0468946621` | `0.9986` | `0.9973` | `1.0000` | `1.0000` |
+| `STRONG` | `0.1076632291` | `0.9821` | `0.9735` | `0.9910` | `0.9888` |
+| `SPIN` | `0.0989401191` | `0.9707` | `0.9748` | `0.9667` | `0.9917` |
+
+Các thông số triển khai:
+
+| Nhóm | Giá trị |
+|---|---:|
+| Vector đặc trưng | 19 chiều |
+| Số mô hình | 3 Autoencoder INT8 |
+| Tổng dung lượng model | khoảng 95.3 KB |
+| Độ trễ suy luận trung bình | khoảng 6.4 ms |
+| Firmware hoàn chỉnh | khoảng 1.20 MB Flash |
+| Biến global/static RAM | khoảng 62 KB |
+| Tần suất publish MQTT | tối đa 1 Hz hoặc khi đổi trạng thái |
+
+Lưu ý diễn giải: tập hold-out được dùng trong quy trình kiểm chứng offline và hiệu chỉnh ngưỡng của phiên bản final; các chỉ số trên không nên diễn giải như một benchmark độc lập tuyệt đối trên thiết bị/máy giặt khác.
 
 ## Kiến trúc hệ thống
 
@@ -44,30 +72,31 @@ flowchart LR
     A["INMP441 microphone"] --> C["XIAO ESP32-S3"]
     B["ADXL345 accelerometer"] --> C
     C --> D["19D feature vector"]
-    D --> E["Tri-state phase routing"]
-    E --> F["GENTLE Autoencoder"]
-    E --> G["STRONG Autoencoder"]
-    E --> H["SPIN Autoencoder"]
-    F --> I["MAE + alarm logic"]
+    D --> E["Phase routing by var_z"]
+    E --> F["GENTLE AE INT8"]
+    E --> G["STRONG AE INT8"]
+    E --> H["SPIN AE INT8"]
+    F --> I["Weighted MAE + alarm filter"]
     G --> I
     H --> I
     I --> J["MQTT broker"]
-    J --> K["Flutter monitoring app"]
+    J --> K["Flutter app"]
+    K --> L["Firebase Firestore"]
 ```
 
-Dữ liệu xử lý theo cửa sổ 1 giây:
+Mỗi cửa sổ xử lý dài 1 giây:
 
-| Nhánh | Tín hiệu | Xử lý | Đặc trưng |
+| Nhánh | Nguồn | Xử lý | Đầu ra |
 |---|---|---|---|
 | Audio | INMP441, 8 kHz | FFT 512, hop 256, 30 frame, 13 Mel band | 13 log-Mel |
-| Vibration | ADXL345 | RMS và variance theo 3 trục | 6 đặc trưng |
-| Fusion | Audio + vibration | Ghép vector | 19 chiều |
+| Rung động | ADXL345 | RMS và variance trên 3 trục | 6 đặc trưng |
+| Hợp nhất | Audio + rung động | Ghép vector | 19 đặc trưng |
 
 Layout vector 19 chiều:
 
-| Index | Ý nghĩa |
+| Index | Đặc trưng |
 |---:|---|
-| `0..12` | 13 đặc trưng log-Mel audio |
+| `0..12` | `mfe_0..mfe_12` |
 | `13` | `rms_x` |
 | `14` | `var_x` |
 | `15` | `rms_y` |
@@ -75,20 +104,21 @@ Layout vector 19 chiều:
 | `17` | `rms_z` |
 | `18` | `var_z` |
 
-`var_z` được dùng để định tuyến cửa sổ hiện tại sang một trong ba pha:
+Định tuyến pha dùng `var_z`:
 
-- `GENTLE`: giặt nhẹ/thấm.
-- `STRONG`: giặt chính.
-- `SPIN`: vắt tốc độ cao.
+| Điều kiện | Pha |
+|---|---|
+| `var_z < 0.105845` | `GENTLE` |
+| `0.105845 <= var_z < 0.386260` | `STRONG` |
+| `var_z >= 0.386260` | `SPIN` |
+
+Hai ngưỡng định tuyến trên được tính bằng K-Means 3 cụm trên `var_z` của 14,000 vector đặc trưng raw và được cố định để tái lập đúng bản final.
 
 ## Cấu trúc mã nguồn
-
-Các entry-point chính của nhánh này:
 
 ```text
 TinyML-Anomaly-Detection/
 |-- .env.example
-|-- .gitignore
 |-- README.md
 |-- final_data_collection.py
 |-- final_feature_extraction.py
@@ -102,6 +132,7 @@ TinyML-Anomaly-Detection/
 |-- tinyml_app/
 |   |-- lib/
 |   |   |-- app_config.example.dart
+|   |   |-- firebase_options.dart
 |   |   |-- main.dart
 |   |   |-- mqtt_factory.dart
 |   |   `-- mqtt_factory_web.dart
@@ -111,18 +142,16 @@ TinyML-Anomaly-Detection/
     `-- generate_env_config.py
 ```
 
-Ý nghĩa từng file:
-
 | File/thư mục | Vai trò |
 |---|---|
-| `dataCollection/final_data_collection.ino` | Firmware thu dữ liệu thô từ INMP441 và ADXL345 qua Serial |
-| `final_data_collection.py` | Script Python nhận stream Serial và lưu thành `.wav` + `.csv` |
-| `final_feature_extraction.py` | Trích xuất 19 đặc trưng từ dữ liệu đã thu |
-| `final_training.py` | Huấn luyện 3 Autoencoder, đánh giá hold-out, xuất header INT8 |
-| `firmware_v11/final_firmware.ino` | Firmware runtime chạy Edge AI và gửi MQTT |
-| `firmware_v11/model_data_final.h` | Header chứa scaler, ngưỡng và 3 model TFLite INT8 |
-| `tools/generate_env_config.py` | Sinh config local cho firmware và Flutter từ `.env` |
-| `tinyml_app/` | Ứng dụng Flutter monitor realtime |
+| `dataCollection/final_data_collection.ino` | Firmware thu dữ liệu raw từ INMP441 và ADXL345 qua Serial |
+| `final_data_collection.py` | Nhận stream Serial và lưu mỗi mẫu thành `.wav` + `.csv` |
+| `final_feature_extraction.py` | Trích xuất CSV đặc trưng 19 chiều từ dữ liệu đã thu |
+| `final_training.py` | Huấn luyện ba Autoencoder, lượng tử hóa INT8, xuất header final |
+| `firmware_v11/final_firmware.ino` | Firmware runtime chạy suy luận TinyML và publish MQTT |
+| `firmware_v11/model_data_final.h` | Bundle model/scaler/ngưỡng final cho firmware |
+| `tools/generate_env_config.py` | Sinh config local từ `.env` cho firmware và Flutter |
+| `tinyml_app/` | Ứng dụng Flutter giám sát trạng thái máy giặt |
 
 ## Phần cứng
 
@@ -131,7 +160,7 @@ TinyML-Anomaly-Detection/
 | MCU | Seeed Studio XIAO ESP32-S3 |
 | Microphone | INMP441 I2S |
 | Accelerometer | ADXL345 I2C |
-| Kết nối mạng | Wi-Fi 2.4 GHz |
+| Kết nối | Wi-Fi 2.4 GHz |
 | Dashboard | Flutter Web/App |
 
 Kết nối chân:
@@ -148,26 +177,24 @@ Kết nối chân:
 | ADXL345 | VCC | 3V3 |
 | ADXL345 | GND | GND |
 
-Gợi ý lắp đặt:
+Khuyến nghị lắp đặt:
 
-- Gắn cảm biến cố định lên thân máy giặt, tránh dây lỏng gây rung giả.
+- Cố định ADXL345 chắc trên thân máy giặt để tránh dây hoặc module rung tự do.
 - Không để microphone chạm trực tiếp vào vỏ kim loại.
-- Giữ hướng gắn ADXL345 ổn định giữa các lần thu dữ liệu và chạy demo.
-- Nên cấp nguồn ổn định cho ESP32-S3 khi chạy inference và Wi-Fi cùng lúc.
+- Giữ hướng gắn ADXL345 ổn định giữa lúc thu dữ liệu và lúc chạy demo.
+- Cấp nguồn ổn định cho ESP32-S3 khi chạy đồng thời Wi-Fi, I2S và inference.
 
 ## Phần mềm cần cài
 
 ### Python
 
-Khuyến nghị dùng Python 3.10 hoặc 3.11. TensorFlow/TensorFlow Model Optimization có thể không ổn định trên một số bản Python mới hơn.
-
-Các thư viện chính:
+Khuyến nghị Python 3.10 hoặc 3.11.
 
 ```powershell
 pip install numpy pandas pyserial scikit-learn tensorflow tensorflow-model-optimization
 ```
 
-Nếu cần chạy đầy đủ pipeline có vẽ biểu đồ hoặc notebook riêng, có thể cài thêm:
+Nếu cần chạy script phụ để phân tích hoặc vẽ biểu đồ:
 
 ```powershell
 pip install matplotlib seaborn
@@ -175,9 +202,14 @@ pip install matplotlib seaborn
 
 ### Arduino IDE
 
-Cần Arduino IDE 2.x hoặc môi trường tương đương có ESP32 board support.
+Yêu cầu:
 
-Thư viện dùng trong firmware:
+- Arduino IDE 2.x hoặc môi trường tương đương.
+- ESP32 board support.
+- Board: `Seeed Studio XIAO ESP32S3`.
+- Serial baud: `921600`.
+
+Thư viện chính:
 
 - `WiFi`
 - `WiFiClientSecure`
@@ -187,27 +219,13 @@ Thư viện dùng trong firmware:
 - `TensorFlowLite_ESP32`
 - `esp_dsp`
 
-Board:
-
-```text
-Seeed Studio XIAO ESP32S3
-```
-
-Serial baud:
-
-```text
-921600
-```
-
 ### Flutter
-
-Ứng dụng Flutter yêu cầu Flutter SDK và Chrome nếu chạy web:
 
 ```powershell
 flutter doctor
 ```
 
-Dependency chính nằm trong `tinyml_app/pubspec.yaml`:
+Dependency chính trong `tinyml_app/pubspec.yaml`:
 
 - `mqtt_client`
 - `firebase_core`
@@ -218,15 +236,21 @@ Dependency chính nằm trong `tinyml_app/pubspec.yaml`:
 
 ## Cấu hình bảo mật
 
-Credential không được commit vào Git. Nhánh này dùng `.env` local để sinh file config cho firmware và Flutter.
+Credential thật không được commit. Repository chỉ chứa file mẫu:
 
-### Bước 1: tạo file `.env`
+```text
+.env.example
+firmware_v11/env_config.example.h
+tinyml_app/lib/app_config.example.dart
+```
+
+Tạo `.env` local:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Điền nội dung thật vào `.env`:
+Điền thông tin thật:
 
 ```env
 WIFI_SSID=your_wifi_ssid
@@ -238,33 +262,24 @@ MQTT_PASSWORD=your_mqtt_password
 MQTT_TOPIC=tinyml/quang_wm_2026/status
 ```
 
-### Bước 2: sinh config local
+Sinh config local:
 
 ```powershell
 python tools/generate_env_config.py
 ```
 
-Lệnh trên tạo:
+Lệnh này tạo:
 
 ```text
 firmware_v11/env_config.h
 tinyml_app/lib/app_config.dart
 ```
 
-Hai file này bị ignore bởi Git và không được push.
+Hai file trên bị ignore bởi Git. Firmware hiện dùng `WiFiClientSecure` với `setInsecure()` để kết nối MQTT TLS port `8883`; đây là kênh mã hóa thử nghiệm nhưng chưa xác thực chứng chỉ CA của broker.
 
-Nếu muốn chỉ định đường dẫn khác:
+## Quy trình tái lập
 
-```powershell
-python tools/generate_env_config.py `
-  --env .env `
-  --firmware-out firmware_v11/env_config.h `
-  --flutter-out tinyml_app/lib/app_config.dart
-```
-
-## Quy trình sử dụng đầy đủ
-
-Quy trình chuẩn gồm 5 bước:
+Quy trình đầy đủ gồm 5 bước:
 
 1. Flash firmware thu dữ liệu.
 2. Thu dữ liệu `.wav` và `.csv`.
@@ -272,7 +287,7 @@ Quy trình chuẩn gồm 5 bước:
 4. Huấn luyện và xuất `model_data_final.h`.
 5. Flash firmware runtime và mở app Flutter.
 
-### Bước 1: flash firmware thu dữ liệu
+### 1. Flash firmware thu dữ liệu
 
 Mở Arduino IDE và nạp:
 
@@ -287,9 +302,7 @@ Board: Seeed Studio XIAO ESP32S3
 Baud: 921600
 ```
 
-Sau khi nạp, kiểm tra Serial Monitor để chắc chắn cảm biến hoạt động.
-
-### Bước 2: thu dữ liệu
+### 2. Thu dữ liệu
 
 Tạo thư mục dữ liệu:
 
@@ -297,7 +310,7 @@ Tạo thư mục dữ liệu:
 New-Item -ItemType Directory -Force dataset_v6/normal
 ```
 
-Chạy script thu dữ liệu:
+Chạy collector:
 
 ```powershell
 python final_data_collection.py --port COM5 --out dataset_v6/normal --duration 5
@@ -307,50 +320,39 @@ Tham số:
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---:|---|
-| `--port` | bắt buộc | Cổng serial của ESP32-S3, ví dụ `COM5` |
+| `--port` | `COM5` | Cổng serial của ESP32-S3 |
 | `--baud` | `921600` | Baud rate |
 | `--out` | `dataset_v6/normal` | Thư mục lưu dữ liệu |
 | `--duration` | `5` | Số giây cho mỗi sample |
 | `--start-index` | `1` | Index bắt đầu đặt tên file |
-| `--count` | `0` | Số sample cần thu, `0` nghĩa là chạy đến khi Ctrl+C |
+| `--count` | `0` | Số sample cần thu; `0` nghĩa là chạy tới khi Ctrl+C |
 
-Mỗi sample tạo ra:
+Mỗi sample gồm:
 
 ```text
 sample_0001.wav
 sample_0001.csv
-sample_0002.wav
-sample_0002.csv
-...
 ```
 
-File `.wav` chứa audio mono 16-bit ở 8 kHz. File `.csv` chứa dữ liệu gia tốc `X`, `Y`, `Z` theo đơn vị g.
-
-### Bước 3: trích xuất đặc trưng
-
-Chạy:
+### 3. Trích xuất đặc trưng
 
 ```powershell
 python final_feature_extraction.py --data-dir dataset_v6/normal --out train_features_v6.csv
 ```
 
-Smoke test với một file đầu tiên:
+Smoke test với một file:
 
 ```powershell
 python final_feature_extraction.py --data-dir dataset_v6/normal --out tmp_features_check.csv --limit-files 1
 ```
 
-Đầu ra là CSV có 19 cột kèm header (`mfe_0..mfe_12`, `rms_x`, `var_x`, `rms_y`, `var_y`, `rms_z`, `var_z`), đúng layout đã mô tả ở phần [Kiến trúc hệ thống](#kiến-trúc-hệ-thống).
-
-Lưu ý:
+Ghi chú:
 
 - Mỗi file 5 giây được tách thành 5 cửa sổ 1 giây.
 - Mỗi cửa sổ dùng 8000 mẫu audio và 1000 dòng rung.
-- Nếu file quá ngắn hoặc thiếu cặp `.wav/.csv`, script sẽ bỏ qua và báo lý do.
+- `final_feature_extraction.py` xuất raw RMS/variance; không clip `var_z` trước khi lưu CSV vì `var_z` là tín hiệu dùng để chia pha.
 
-### Bước 4: huấn luyện model
-
-Chạy pipeline mặc định:
+### 4. Huấn luyện model
 
 ```powershell
 python final_training.py `
@@ -359,17 +361,16 @@ python final_training.py `
   --results results_final.json
 ```
 
-Các giá trị ngưỡng trong script được cố định để khớp hoàn toàn với `latex_v2`:
+Các tham số quan trọng:
 
-| Giá trị | Con số | Ý nghĩa |
-|---|---:|---|
-| `VAR_Z_THR1` | `0.105845` | Ranh giới `GENTLE/STRONG`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
-| `VAR_Z_THR2` | `0.386260` | Ranh giới `STRONG/SPIN`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
-| `THRESHOLD_GENTLE` | tự tính khi train | Ngưỡng MAE tối ưu theo F1, có chặn dưới bởi percentile normal như `training_v2.py` |
-| `THRESHOLD_STRONG` | tự tính khi train | Ngưỡng MAE tối ưu theo F1, có chặn dưới bởi percentile normal như `training_v2.py` |
-| `THRESHOLD_SPIN` | tự tính khi train | Ngưỡng MAE tối ưu theo F1, có chặn dưới bởi percentile normal như `training_v2.py` |
-
-`final_training.py` không cung cấp thêm các chế độ chọn ngưỡng khác vì mục tiêu của nhánh này là tái lập đúng bản đã chốt trong `latex_v2`, không mở rộng thêm thí nghiệm ngoài báo cáo.
+| Tham số | Mặc định |
+|---|---:|
+| `--test-size` | `0.20` |
+| `--val-size` | `0.15` |
+| `--gentle-target` | `20000` |
+| `--other-target` | `10000` |
+| `--float-epochs` | `200` |
+| `--qat-epochs` | `80` |
 
 Đầu ra:
 
@@ -380,50 +381,33 @@ results_final.json
 
 `model_data_final.h` chứa:
 
-- `VAR_Z_THR1`: ranh giới K-Means giữa cụm `GENTLE` và `STRONG`
-- `VAR_Z_THR2`: ranh giới K-Means giữa cụm `STRONG` và `SPIN`
-- `THRESHOLD_GENTLE`
-- `THRESHOLD_STRONG`
-- `THRESHOLD_SPIN`
-- scaler vibration cho từng pha
+- `VAR_Z_THR1`, `VAR_Z_THR2`
+- `THRESHOLD_GENTLE`, `THRESHOLD_STRONG`, `THRESHOLD_SPIN`
+- scaler cho từng pha
+- các giá trị clip runtime của đặc trưng rung
 - 3 mảng model TFLite INT8
 
-Ngưỡng MAE hiện tại trong app và header:
+### 5. Flash firmware runtime
 
-| Phase | Threshold |
-|---|---:|
-| GENTLE | `0.0469` |
-| STRONG | `0.1077` |
-| SPIN | `0.0989` |
-
-### Bước 5: flash firmware runtime
-
-Trước khi flash, cần có:
+Trước khi flash cần có:
 
 ```text
-firmware_v11/model_data_final.h
 firmware_v11/env_config.h
+firmware_v11/model_data_final.h
 ```
 
-Nếu chưa có `env_config.h`, chạy:
-
-```powershell
-python tools/generate_env_config.py
-```
-
-Mở Arduino IDE và nạp:
+Nạp firmware:
 
 ```text
 firmware_v11/final_firmware.ino
 ```
 
-Serial Monitor nên hiển thị dạng:
+Log boot kỳ vọng:
 
 ```text
 === BOOT FINAL (True Parallel Dual-Core) ===
   Core 0: AUDIO (I2S + FFT)
   Core 1: VIB (ADXL@1ms, prio=15) + AI (prio=5)
-[WIFI] Connecting...
 [WIFI] Connected
 [ADXL] OK (0xE5)
 [I2S] OK
@@ -433,10 +417,16 @@ Serial Monitor nên hiển thị dạng:
 [MQTT] Connecting to HiveMQ Cloud...OK
 ```
 
-Runtime log chính:
+## Firmware runtime
+
+Firmware runtime xử lý song song bằng FreeRTOS:
+
+- Core 0: audio I2S, FFT, Mel-filterbank.
+- Core 1: đọc ADXL345, ghép feature, định tuyến pha, chạy Autoencoder, publish MQTT.
+
+Log suy luận:
 
 ```text
-[RAW] mel: ... | rms: x=... y=... z=... | var: x=... y=... z=...
 [OK   ][GENTLE] MAE:0.0292 (f:0.0295) THR:0.0469 consec:0 t:7839us | wins:2 g:2 st:0 sp:0
 ```
 
@@ -444,16 +434,16 @@ Runtime log chính:
 
 | Trường | Ý nghĩa |
 |---|---|
-| `OK/HIGH/ALARM` | Trạng thái sau so sánh ngưỡng và bộ lọc cửa sổ |
-| `GENTLE/STRONG/SPIN` | Pha được định tuyến theo `var_z` |
-| `MAE` | Sai số tái tạo miền INT8 dùng để cảnh báo |
+| `OK/HIGH/ALARM` | Trạng thái sau so sánh ngưỡng và lọc cửa sổ |
+| `GENTLE/STRONG/SPIN` | Pha vận hành hiện tại |
+| `MAE` | Sai số tái tạo INT8 dùng cho cảnh báo |
 | `f` | MAE float tham khảo |
-| `THR` | Ngưỡng MAE của pha hiện tại |
-| `consec` | Số cửa sổ HIGH liên tiếp |
-| `t` | Thời gian inference microsecond |
+| `THR` | Ngưỡng của pha hiện tại |
+| `consec` | Số cửa sổ vượt ngưỡng trong cửa sổ trượt 10 mẫu |
+| `t` | Thời gian inference tính bằng microsecond |
 | `wins` | Tổng số cửa sổ đã xử lý |
 
-Logic alarm:
+Logic cảnh báo:
 
 ```text
 ALARM_WINDOW = 10
@@ -461,22 +451,17 @@ ALARM_ENTER_THR = 5
 ALARM_EXIT_THR = 1
 ```
 
-Nghĩa là:
+Hệ thống vào `ALARM` khi có ít nhất `5/10` cửa sổ gần nhất vượt ngưỡng và thoát `ALARM` khi còn nhiều nhất `1/10` cửa sổ vượt ngưỡng.
 
-- Vào `ALARM` khi có ít nhất `5/10` cửa sổ gần nhất vượt ngưỡng.
-- Thoát `ALARM` khi còn nhiều nhất `1/10` cửa sổ gần nhất vượt ngưỡng.
+## Ứng dụng Flutter
 
-## Chạy ứng dụng Flutter
-
-### Chuẩn bị config app
-
-Nếu chưa sinh `tinyml_app/lib/app_config.dart`, chạy:
+Sinh config nếu chưa có:
 
 ```powershell
 python tools/generate_env_config.py
 ```
 
-### Chạy trên Chrome
+Chạy web:
 
 ```powershell
 cd tinyml_app
@@ -484,9 +469,7 @@ C:\Users\Admin\flutter\bin\flutter.bat pub get
 C:\Users\Admin\flutter\bin\flutter.bat run -d chrome
 ```
 
-Ghi chú cho Flutter Web: `tinyml_app/lib/mqtt_factory_web.dart` dùng WebSocket Secure với URL `wss://<MQTT_HOST>/mqtt` và port `8884`, đúng với cách HiveMQ Cloud thường expose MQTT over WebSocket. Firmware ESP32-S3 vẫn dùng MQTT TLS port `8883`.
-
-Nếu Flutter nằm trong PATH:
+Nếu Flutter đã nằm trong `PATH`:
 
 ```powershell
 cd tinyml_app
@@ -494,32 +477,24 @@ flutter pub get
 flutter run -d chrome
 ```
 
-### Build web release
+Build release web:
 
 ```powershell
 cd tinyml_app
 flutter build web
 ```
 
-Output nằm trong:
+Ghi chú:
 
-```text
-tinyml_app/build/web
-```
-
-### Các màn hình chính
-
-| Tab | Chức năng |
-|---|---|
-| Monitor | Trạng thái hiện tại, pha giặt, lịch sử sự kiện |
-| MAE Chart | Đồ thị MAE realtime, các đường ngưỡng theo pha |
-| Thống kê | Tổng số window, số alarm, uptime, phân bố trạng thái, thông số kỹ thuật |
+- Firmware dùng MQTT TLS port `8883`.
+- Flutter Web dùng MQTT over WebSocket Secure, thường là `wss://<MQTT_HOST>/mqtt` qua port `8884`.
+- App có ba tab chính: Monitor, MAE Chart, Thống kê.
 
 ## Payload MQTT
 
-Firmware publish JSON lên topic trong `MQTT_TOPIC`.
+Firmware publish JSON lên topic cấu hình trong `MQTT_TOPIC`.
 
-Ví dụ payload:
+Ví dụ:
 
 ```json
 {
@@ -532,68 +507,46 @@ Ví dụ payload:
 }
 ```
 
-Ý nghĩa:
-
 | Field | Kiểu | Ý nghĩa |
 |---|---|---|
 | `state` | string | `OK`, `HIGH`, hoặc `ALARM` |
-| `mae` | number | MAE sau suy luận INT8 |
-| `is_alarm` | boolean | Trạng thái alarm đã qua bộ lọc 10 cửa sổ |
+| `mae` | number | MAE INT8 sau suy luận |
+| `is_alarm` | boolean | Trạng thái cảnh báo đã qua bộ lọc cửa sổ |
 | `win` | number | Số thứ tự cửa sổ |
-| `consec` | number | Số cửa sổ HIGH trong cửa sổ trượt hoặc bộ đếm liên quan |
+| `consec` | number | Số cửa sổ vượt ngưỡng trong cửa sổ trượt |
 | `mode` | string | `GENTLE`, `STRONG`, hoặc `SPIN` |
 
-Ví dụ gửi payload test từ một script hoặc MQTT client:
+## Kiểm tra trước khi nộp hoặc push
 
-```json
-{"state":"HIGH","mae":0.064,"is_alarm":false,"win":3,"consec":2,"mode":"GENTLE"}
-```
-
-Để app chuyển sang `ALARM`, cần gửi chuỗi payload thỏa logic `>=5/10` cửa sổ bất thường, ví dụ:
-
-```json
-{"state":"ALARM","mae":0.082,"is_alarm":true,"win":6,"consec":5,"mode":"GENTLE"}
-```
-
-## Kiểm tra chất lượng trước khi push
-
-Chạy kiểm tra Python:
+Kiểm tra Python:
 
 ```powershell
 python -m py_compile final_data_collection.py final_feature_extraction.py final_training.py tools\generate_env_config.py
 ```
 
-Chạy kiểm tra Flutter:
+Kiểm tra Flutter:
 
 ```powershell
 cd tinyml_app
 C:\Users\Admin\flutter\bin\flutter.bat analyze
 ```
 
-Kiểm tra Git trước khi commit:
+Kiểm tra Git:
 
 ```powershell
 git status --short
 git diff --check
 ```
 
-Không dùng:
+Không stage toàn bộ bằng `git add .` nếu workspace có dataset, video, LaTeX hoặc artifact local. Nên stage rõ từng file:
 
 ```powershell
-git add .
+git add README.md final_feature_extraction.py final_training.py firmware_v11/final_firmware.ino
 ```
 
-Nên stage rõ file:
-
-```powershell
-git add README.md final_training.py firmware_v11/final_firmware.ino
-```
-
-## Xử lý lỗi thường gặp
+## Lỗi thường gặp
 
 ### Thiếu `env_config.h`
-
-Lỗi:
 
 ```text
 env_config.h: No such file or directory
@@ -609,8 +562,6 @@ python tools/generate_env_config.py
 
 ### Thiếu `app_config.dart`
 
-Lỗi Flutter:
-
 ```text
 Error: Error when reading 'lib/app_config.dart'
 ```
@@ -621,14 +572,23 @@ Cách xử lý:
 python tools/generate_env_config.py
 ```
 
-### App không nhận MQTT
+### ESP32-S3 không publish MQTT
 
 Kiểm tra:
 
-- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD` trong `.env`.
-- Firmware và Flutter có cùng `MQTT_TOPIC`.
-- HiveMQ Cloud cho phép WebSocket/TLS nếu chạy Flutter Web.
-- ESP32-S3 đã kết nối Wi-Fi và Serial có dòng `[MQTT] Connecting...OK`.
+- Wi-Fi trong `.env`.
+- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`.
+- Topic của firmware và Flutter có giống nhau không.
+- Serial có dòng `[MQTT] Connecting to HiveMQ Cloud...OK` hay không.
+- HiveMQ Cloud có bật đúng endpoint TLS/WebSocket tương ứng không.
+
+### Flutter Web không nhận dữ liệu
+
+Kiểm tra:
+
+- `tinyml_app/lib/app_config.dart` đã được sinh lại từ `.env`.
+- Flutter Web dùng WebSocket Secure port `8884`, không phải port firmware `8883`.
+- Payload MQTT có đủ các field `state`, `mae`, `is_alarm`, `win`, `consec`, `mode`.
 
 ### Serial không có dữ liệu
 
@@ -636,12 +596,12 @@ Kiểm tra:
 
 - Đúng cổng COM.
 - Đúng baud `921600`.
-- Firmware collection đã được flash, không phải firmware runtime.
+- Đang flash firmware collection nếu muốn thu dữ liệu.
 - INMP441 và ADXL345 nối đúng chân.
 
 ### ADXL345 không nhận
 
-Serial có thể báo:
+Nếu Serial báo:
 
 ```text
 [ADXL] WARN id=0x00
@@ -649,44 +609,40 @@ Serial có thể báo:
 
 Kiểm tra:
 
-- SDA/SCL đúng GPIO5/GPIO4.
+- SDA/SCL là GPIO5/GPIO4.
 - Module dùng nguồn 3V3.
 - Địa chỉ I2C là `0x53`.
-- Dây GND chung với ESP32-S3.
+- ESP32-S3 và ADXL345 có GND chung.
 
-### TensorFlow không cài được
+### TensorFlow hoặc TMOT không cài được
 
 Khuyến nghị:
 
 - Dùng Python 3.10 hoặc 3.11.
 - Tạo virtual environment riêng.
-- Nếu Windows gặp lỗi TensorFlow, cân nhắc chạy training trên WSL2, Colab hoặc Kaggle.
+- Nếu Windows lỗi dependency, chạy training trên WSL2, Colab hoặc Kaggle.
 
-## Ghi chú về dữ liệu và tài liệu
+## Ghi chú artifact
 
-Nhánh này cố ý không chứa:
+Repository source final không nên commit các file sau:
 
-- `latex/`
-- `latex_v2/`
-- `slides/`
-- dataset thu thập
-- file `.h5`
-- biểu đồ `.png`
-- video demo
-- file `.env`
+- `.env`
 - `firmware_v11/env_config.h`
 - `tinyml_app/lib/app_config.dart`
+- dataset thu thập
+- file `.h5`
+- biểu đồ hoặc video demo sinh ra
+- file PDF/LaTeX/slide cục bộ nếu branch publish không yêu cầu
+- cache build của Flutter, Arduino, Python
 
-Các file trên là dữ liệu cục bộ hoặc artifact sinh ra trong quá trình làm đồ án, không phải source code cần publish.
+Các file báo cáo như `latex_v2`, `latex_v3`, slide và video demo có thể tồn tại trong workspace local để phục vụ bảo vệ đồ án, nhưng không phải artifact bắt buộc của source code runtime.
 
 ## Tác giả
 
-Quách Ngọc Quang<br>
-Đề tài: Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên.
+**Quách Ngọc Quang**
 
-## Giảng viên hướng dẫn
+Đồ án tốt nghiệp định hướng TinyML, Edge AI và AIoT cho giám sát bất thường máy giặt dân dụng.
 
-Cán bộ hướng dẫn: TS. Nguyễn Kiêm Hùng
+Giảng viên hướng dẫn: **TS. Nguyễn Kiêm Hùng**
 
-Cán bộ đồng hướng dẫn: TS. Mai Linh
-
+Giảng viên đồng hướng dẫn: **TS. Mai Linh**
