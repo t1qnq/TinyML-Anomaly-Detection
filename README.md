@@ -689,4 +689,6 @@ Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho 
 ## Giảng viên hướng dẫn
 
 Cán bộ hướng dẫn: TS. Nguyễn Kiêm Hùng
+
 Cán bộ đồng hướng dẫn: TS. Mai Linh
+
