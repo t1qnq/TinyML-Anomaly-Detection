@@ -66,6 +66,7 @@ extension WashModeX on WashMode {
   }
 }
 
+// Convert the firmware MQTT mode string into the app enum.
 WashMode parseModeFromString(String? s) {
   switch (s?.toUpperCase()) {
     case 'GENTLE': return WashMode.gentle;
@@ -101,6 +102,7 @@ class AlarmEvent {
 final FlutterLocalNotificationsPlugin _notifPlugin =
     FlutterLocalNotificationsPlugin();
 
+// Initialize the local notification channel used for alarm alerts.
 Future<void> initNotifications() async {
   const android = AndroidInitializationSettings('@mipmap/ic_launcher');
   await _notifPlugin.initialize(
@@ -112,6 +114,7 @@ Future<void> initNotifications() async {
       ?.requestNotificationsPermission();
 }
 
+// Show a high-priority notification when the firmware reports ALARM.
 Future<void> showAlarmNotification(double mae) async {
   const details = AndroidNotificationDetails(
     'alarm_channel', 'Cảnh báo rung lắc',
@@ -430,6 +433,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     }
   }
 
+  // Append one alarm/status event and keep the history list bounded.
   void _addEvent(AlarmEvent e) {
     _events.insert(0, e);
     if (_events.length > kMaxHistory) _events.removeLast();
@@ -741,6 +745,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
+  // Mark the current alarm events as acknowledged in the local UI.
   void _acknowledgeAlarm() {
     final idx = _events.indexWhere(
         (e) => e.isAlarm && e.win == _currentWin);
@@ -787,6 +792,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     );
   }
 
+  // Render one row in the recent event history list.
   Widget _buildHistoryItem(AlarmEvent e) {
     final color = e.isAlarm ? const Color(0xFFFF4C6A) : const Color(0xFF22D9A0);
     final icon  = e.isAlarm ? '⚡' : '✓';
@@ -1002,6 +1008,7 @@ class _StatsTab extends StatelessWidget {
     return '${m}m ${s}s';
   }
 
+  // Calculate the average MAE for one washing phase from local history.
   String _calcAvgMae(WashMode mode) {
     if (phaseCount == null || phaseMaeSum == null) return '—';
     final count = phaseCount![mode] ?? 0;
@@ -1010,6 +1017,7 @@ class _StatsTab extends StatelessWidget {
     return (sum / count).toStringAsFixed(4);
   }
 
+  // Calculate the alarm ratio for one phase from local counters.
   String _calcAlarmRate(WashMode mode) {
     if (phaseCount == null || phaseAlarmCount == null) return '0.0%';
     final count = phaseCount![mode] ?? 0;
@@ -1154,6 +1162,7 @@ class _StatsTab extends StatelessWidget {
     );
   }
 
+  // Render one key-value row in the technical information section.
   Widget _buildTechInfo({required String label, required String value}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),

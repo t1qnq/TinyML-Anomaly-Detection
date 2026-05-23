@@ -40,6 +40,14 @@ VIB_ROWS_PER_WINDOW = 1000
 
 AUDIO_SAMPLES_PER_WINDOW = AUDIO_SAMPLE_RATE_HZ * WINDOW_SECONDS
 
+# These caps are part of the feature pipeline used to create train_features_v6.csv.
+# They limit rare vibration spikes before the row is saved, keeping the extractor
+# consistent with the data distribution documented in latex_v2.
+VIB_CLIP_RMS_Z = 0.30
+VIB_CLIP_VAR_X = 0.001097
+VIB_CLIP_VAR_Y = 0.000978
+VIB_CLIP_VAR_Z = 0.060464
+
 MEL_FILTERBANK = (
     (1, 11, 21),
     (11, 21, 32),
@@ -75,6 +83,7 @@ def read_wav_int16_mono(path: str | Path, expected_sr: int = AUDIO_SAMPLE_RATE_H
 
 
 def hann_window(n: int) -> np.ndarray:
+    """Build the same Hann analysis window used before each FFT frame."""
     i = np.arange(n, dtype=np.float32)
     return 0.5 * (1.0 - np.cos(2.0 * np.pi * i / (n - 1)))
 
@@ -137,21 +146,33 @@ def mel_features(segment: np.ndarray) -> np.ndarray:
 
 
 def vibration_features(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Return RMS and variance for the three ADXL345 axes."""
+    """Return clipped RMS/variance features for the three ADXL345 axes.
+
+    The ordering and clipping match the extractor used before the final cleanup:
+    [rms_x, var_x, rms_y, var_y, rms_z, var_z]. The fixed caps prevent a small
+    number of sensor spikes from dominating phase routing and scaler fitting.
+    """
     x = x.astype(np.float32, copy=False)
     y = y.astype(np.float32, copy=False)
     z = z.astype(np.float32, copy=False)
 
     def rms(values: np.ndarray) -> float:
+        """Compute root-mean-square acceleration for one axis."""
         return float(np.sqrt(np.mean(values * values)))
 
     def var(values: np.ndarray) -> float:
+        """Compute acceleration variance for one axis."""
         return float(np.var(values))
 
-    return np.array(
+    features = np.array(
         [rms(x), var(x), rms(y), var(y), rms(z), var(z)],
         dtype=np.float32,
     )
+    features[1] = min(features[1], VIB_CLIP_VAR_X)
+    features[3] = min(features[3], VIB_CLIP_VAR_Y)
+    features[4] = min(features[4], VIB_CLIP_RMS_Z)
+    features[5] = min(features[5], VIB_CLIP_VAR_Z)
+    return features
 
 
 def extract_file(wav_path: str | Path, csv_path: str | Path) -> tuple[list[np.ndarray], str | None]:

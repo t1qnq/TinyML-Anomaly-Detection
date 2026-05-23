@@ -342,7 +342,7 @@ Smoke test với một file đầu tiên:
 python final_feature_extraction.py --data-dir dataset_v6/normal --out tmp_features_check.csv --limit-files 1
 ```
 
-Đầu ra là CSV có 19 cột không header, đúng layout đã mô tả ở phần [Kiến trúc hệ thống](#kiến-trúc-hệ-thống).
+Đầu ra là CSV có 19 cột kèm header (`mfe_0..mfe_12`, `rms_x`, `var_x`, `rms_y`, `var_y`, `rms_z`, `var_z`), đúng layout đã mô tả ở phần [Kiến trúc hệ thống](#kiến-trúc-hệ-thống).
 
 Lưu ý:
 
@@ -358,35 +358,20 @@ Chạy pipeline mặc định:
 python final_training.py `
   --csv train_features_v6.csv `
   --out-header firmware_v11/model_data_final.h `
-  --results results_final.json `
-  --phase-threshold-mode kmeans `
-  --anomaly-threshold-mode optimal_f1
+  --results results_final.json
 ```
 
-Các chế độ quan trọng:
+Các giá trị ngưỡng trong script được cố định để khớp hoàn toàn với `latex_v2`:
 
-| Tham số | Giá trị | Ý nghĩa |
-|---|---|---|
-| `--phase-threshold-mode` | `kmeans` | Tính ngưỡng chuyển pha bằng K-Means trên `var_z` |
-| `--phase-threshold-mode` | `fixed` | Tái lập đúng hai ngưỡng K-Means đã tính từ 14.000 mẫu gốc: `0.105845`, `0.386260` |
-| `--anomaly-threshold-mode` | `optimal_f1` | Chọn ngưỡng MAE tối ưu theo F1 trên đánh giá offline |
-| `--anomaly-threshold-mode` | `normal_percentile` | Chọn ngưỡng theo percentile của normal MAE |
-| `--anomaly-threshold-mode` | `mean_std` | Chọn ngưỡng theo trung bình + độ lệch chuẩn |
-| `--anomaly-threshold-mode` | `fixed` | Dùng ngưỡng truyền vào qua `--fixed-*` |
+| Giá trị | Con số | Ý nghĩa |
+|---|---:|---|
+| `VAR_Z_THR1` | `0.105845` | Ranh giới `GENTLE/STRONG`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
+| `VAR_Z_THR2` | `0.386260` | Ranh giới `STRONG/SPIN`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
+| `THRESHOLD_GENTLE` | tự tính khi train | Ngưỡng MAE tối ưu theo F1, có chặn dưới bởi percentile normal như `training_v2.py` |
+| `THRESHOLD_STRONG` | tự tính khi train | Ngưỡng MAE tối ưu theo F1, có chặn dưới bởi percentile normal như `training_v2.py` |
+| `THRESHOLD_SPIN` | tự tính khi train | Ngưỡng MAE tối ưu theo F1, có chặn dưới bởi percentile normal như `training_v2.py` |
 
-Lưu ý về hai ngưỡng chuyển pha: `0.105845` và `0.386260` không phải số chọn tay. Đây là hai ranh giới cụm thu được bằng K-Means trên cột `var_z` của toàn bộ 14.000 vector đặc trưng gốc trong `train_features_v6.csv`. Chế độ `fixed` chỉ dùng để tái lập đúng thí nghiệm v2 đã báo cáo.
-
-Nếu muốn tái lập đúng ngưỡng MAE đang dùng trong header/app:
-
-```powershell
-python final_training.py `
-  --csv train_features_v6.csv `
-  --phase-threshold-mode fixed `
-  --anomaly-threshold-mode fixed `
-  --fixed-gentle 0.0468946621 `
-  --fixed-strong 0.1076632291 `
-  --fixed-spin 0.0989401191
-```
+`final_training.py` không cung cấp thêm các chế độ chọn ngưỡng khác vì mục tiêu của nhánh này là tái lập đúng bản đã chốt trong `latex_v2`, không mở rộng thêm thí nghiệm ngoài báo cáo.
 
 Đầu ra:
 

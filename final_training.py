@@ -25,7 +25,6 @@ os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import RobustScaler
@@ -51,6 +50,17 @@ WEIGHTS = np.array([1.0] * MEL_DIM + [5.0] * VIB_DIM, dtype=np.float32)
 WEIGHT_SUM = float(np.sum(WEIGHTS))
 
 PHASES = ("GENTLE", "STRONG", "SPIN")
+
+# The two phase-routing thresholds below are the values used in latex_v2.
+# They were obtained before final packaging by running K-Means with three
+# clusters on column 18 (`var_z`) of all 14,000 raw feature windows:
+#   0.105845 separates GENTLE and STRONG
+#   0.386260 separates STRONG and SPIN
+#
+# They are intentionally fixed here so the public final code reproduces the
+# exact experiment, figures and tables already reported in latex_v2.
+VAR_Z_THR1 = 0.105845
+VAR_Z_THR2 = 0.386260
 
 
 @dataclass
@@ -78,7 +88,7 @@ def load_training_dependencies() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse training, thresholding and export options."""
+    """Parse only the reproducibility and export options used by latex_v2."""
     parser = argparse.ArgumentParser(description="Train final leakage-free TinyML models")
     parser.add_argument("--csv", default="train_features_v6.csv")
     parser.add_argument("--out-header", default="firmware_v11/model_data_final.h")
@@ -86,28 +96,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-size", type=float, default=0.20)
     parser.add_argument("--val-size", type=float, default=0.15)
-    parser.add_argument(
-        "--phase-threshold-mode",
-        choices=["kmeans", "fixed"],
-        default="kmeans",
-        help="How to determine GENTLE/STRONG/SPIN routing thresholds from var_z.",
-    )
-    # These defaults are not hand-picked constants. They are the two K-Means
-    # decision boundaries obtained from the full 14,000 raw feature windows:
-    #   cluster_0 | cluster_1 -> 0.105845  (GENTLE | STRONG)
-    #   cluster_1 | cluster_2 -> 0.386260  (STRONG | SPIN)
-    # The option is kept only to reproduce the documented v2 experiment exactly.
-    parser.add_argument("--fixed-var-z-thr1", type=float, default=0.105845)
-    parser.add_argument("--fixed-var-z-thr2", type=float, default=0.386260)
-    parser.add_argument(
-        "--anomaly-threshold-mode",
-        choices=["optimal_f1", "normal_percentile", "mean_std", "fixed"],
-        default="optimal_f1",
-        help="How to determine the MAE alarm threshold for each phase.",
-    )
-    parser.add_argument("--fixed-gentle", type=float, default=0.0468946621)
-    parser.add_argument("--fixed-strong", type=float, default=0.1076632291)
-    parser.add_argument("--fixed-spin", type=float, default=0.0989401191)
     parser.add_argument("--gentle-target", type=int, default=20000)
     parser.add_argument("--other-target", type=int, default=10000)
     parser.add_argument("--float-epochs", type=int, default=200)
@@ -129,39 +117,20 @@ def load_features(csv_path: str | Path) -> np.ndarray:
     return df.values.astype(np.float32)
 
 
-def compute_phase_thresholds(
-    var_z: np.ndarray,
-    mode: str,
-    seed: int,
-    fixed_thr1: float,
-    fixed_thr2: float,
-) -> dict[str, object]:
-    """Return thresholds that route raw windows into three physical phases.
+def compute_phase_thresholds() -> dict[str, object]:
+    """Return the fixed K-Means phase thresholds used by the thesis.
 
-    In the documented v2 experiment, the fixed fallback values are still
-    K-Means results: they were computed once from all 14,000 raw windows using
-    column 18 (`var_z`). They are kept here only for exact reproducibility.
+    The values are fixed for reproducibility, but their origin is still
+    data-driven: K-Means was run on the full 14,000-window `var_z` distribution
+    to find three operating clusters, then the two midpoints between sorted
+    cluster centers were used as routing boundaries.
     """
-    if mode == "fixed":
-        return {
-            "mode": "fixed",
-            "thr1": float(fixed_thr1),
-            "thr2": float(fixed_thr2),
-            "centers": None,
-        }
-
-    values = var_z.reshape(-1, 1).astype(np.float32)
-    kmeans = KMeans(n_clusters=3, random_state=seed, n_init=20)
-    kmeans.fit(values)
-
-    centers = np.sort(kmeans.cluster_centers_.reshape(-1))
-    thr1 = float((centers[0] + centers[1]) / 2.0)
-    thr2 = float((centers[1] + centers[2]) / 2.0)
     return {
-        "mode": "kmeans",
-        "thr1": thr1,
-        "thr2": thr2,
-        "centers": [float(v) for v in centers],
+        "mode": "kmeans_precomputed",
+        "source": "K-Means on var_z from 14,000 raw feature windows",
+        "thr1": VAR_Z_THR1,
+        "thr2": VAR_Z_THR2,
+        "centers": None,
     }
 
 
@@ -208,7 +177,13 @@ def scale_subset(raw: np.ndarray, vib_scaler: RobustScaler) -> np.ndarray:
 
 
 def augment_raw_data(x_raw: np.ndarray, target_size: int) -> np.ndarray:
-    """Augment physical-space data for denoising Autoencoder training."""
+    """Augment physical-space data exactly like training_v2.py.
+
+    This is the first augmentation stage in the v2 thesis pipeline:
+    vibration magnitude scaling, audio volume shifting, small Mel jitter and
+    small vibration jitter. The separate Gaussian noise with sigma=0.02 is
+    added later after scaling to [0, 1] for denoising Autoencoder training.
+    """
     if len(x_raw) == 0:
         return np.zeros((0, FEAT_DIM), dtype=np.float32)
 
@@ -272,8 +247,10 @@ def train_phase(
     )
 
     target = args.gentle_target if phase == "GENTLE" else args.other_target
+    # Keep the same split arithmetic as training_v2.py: 85% augmented train
+    # and 15% augmented validation for the default v2 configuration.
     target_train = int(target * (1.0 - args.val_size))
-    target_val = target - target_train
+    target_val = int(target * args.val_size)
 
     scaler = safe_robust_fit(train_sub_raw[:, VIB_START:])
     train_clean = scale_subset(augment_raw_data(train_sub_raw, target_train), scaler)
@@ -346,6 +323,7 @@ def synthesize_anomalies(x_raw: np.ndarray, phase: str) -> np.ndarray:
 def convert_to_int8(qat_model: tf.keras.Model, representative_data: np.ndarray) -> bytes:
     """Convert a QAT Keras model to fully-int8 TFLite bytes."""
     def representative_gen():
+        """Yield normal scaled samples for TFLite INT8 calibration."""
         for i in range(min(100, len(representative_data))):
             yield [representative_data[i : i + 1].astype(np.float32)]
 
@@ -386,26 +364,18 @@ def choose_anomaly_threshold(
     maes_normal: np.ndarray,
     maes_anomaly: np.ndarray,
     phase: str,
-    mode: str,
-    fixed_value: float | None,
 ) -> tuple[float, str]:
-    """Choose the MAE alarm threshold according to the selected evaluation rule."""
+    """Choose the MAE alarm threshold exactly as in the v2 thesis pipeline.
+
+    The threshold is first swept to maximize F1 on the offline normal/anomaly
+    evaluation set. To avoid selecting a value that is too close to the normal
+    distribution, the final threshold is clamped to at least the 95th percentile
+    of normal MAE for GENTLE and the 98th percentile for STRONG/SPIN.
+    """
     labels = np.concatenate(
         [np.zeros(len(maes_normal), dtype=np.int32), np.ones(len(maes_anomaly), dtype=np.int32)]
     )
     scores = np.concatenate([maes_normal, maes_anomaly])
-
-    if mode == "fixed":
-        if fixed_value is None:
-            raise ValueError(f"{phase}: fixed threshold is missing")
-        return float(fixed_value), "fixed"
-
-    if mode == "normal_percentile":
-        percentile = 95 if phase == "GENTLE" else 98
-        return float(np.percentile(maes_normal, percentile)), f"normal_p{percentile}"
-
-    if mode == "mean_std":
-        return float(np.mean(maes_normal) + 3.0 * np.std(maes_normal)), "mean_plus_3std"
 
     thresholds = np.linspace(np.min(maes_normal), np.max(maes_anomaly), 200)
     best_thr = float(thresholds[0])
@@ -416,7 +386,10 @@ def choose_anomaly_threshold(
         if current_f1 > best_f1:
             best_f1 = current_f1
             best_thr = float(threshold)
-    return best_thr, "optimal_f1"
+
+    normal_percentile = 95 if phase == "GENTLE" else 98
+    safe_min = float(np.percentile(maes_normal, normal_percentile))
+    return max(best_thr, safe_min), f"optimal_f1_with_normal_p{normal_percentile}"
 
 
 def evaluate_phase(
@@ -432,17 +405,10 @@ def evaluate_phase(
     maes_normal = run_tflite_mae(model_bytes, normal_scaled)
     maes_anomaly = run_tflite_mae(model_bytes, anomaly_scaled)
 
-    fixed_thresholds = {
-        "GENTLE": args.fixed_gentle,
-        "STRONG": args.fixed_strong,
-        "SPIN": args.fixed_spin,
-    }
     threshold, threshold_method = choose_anomaly_threshold(
         maes_normal,
         maes_anomaly,
         phase,
-        args.anomaly_threshold_mode,
-        fixed_thresholds[phase],
     )
 
     labels = np.concatenate(
@@ -539,13 +505,7 @@ def main() -> None:
     set_reproducibility(args.seed)
 
     x_raw_original = load_features(args.csv)
-    phase_cfg = compute_phase_thresholds(
-        x_raw_original[:, 18],
-        mode=args.phase_threshold_mode,
-        seed=args.seed,
-        fixed_thr1=args.fixed_var_z_thr1,
-        fixed_thr2=args.fixed_var_z_thr2,
-    )
+    phase_cfg = compute_phase_thresholds()
 
     vib_clip = compute_vib_clip(x_raw_original)
     x_raw = apply_vib_clip(x_raw_original, vib_clip)
@@ -580,7 +540,7 @@ def main() -> None:
             "val_size": args.val_size,
         },
         "phase_switch": phase_cfg,
-        "anomaly_threshold_mode": args.anomaly_threshold_mode,
+        "anomaly_threshold_mode": "optimal_f1_with_normal_percentile_guard",
         "thresholds": thresholds,
         "phases": metrics,
     }
