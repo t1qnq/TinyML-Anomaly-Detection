@@ -74,6 +74,7 @@ static const MelBand MEL_FB[MEL_BANDS] = {
     {182,215,255 },
 };
 
+// Apply the fixed 13-band triangular Mel filterbank to one FFT spectrum.
 static void mel_power(const float* fft, float* out) {
     for (int b = 0; b < MEL_BANDS; b++) {
         float p = 0.0f;
@@ -103,6 +104,7 @@ static void mel_power(const float* fft, float* out) {
 WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 
+// Reconnect to the MQTT broker without blocking the AI tasks.
 void reconnect_mqtt() {
     if (!mqttClient.connected()) {
         Serial.print("[MQTT] Connecting to HiveMQ Cloud...");
@@ -117,6 +119,7 @@ void reconnect_mqtt() {
 
 static int32_t hpf_x = 0, hpf_y = 0;
 
+// Simple high-pass filter to remove microphone DC drift before FFT.
 static inline int16_t hpf(int16_t in) {
     int32_t cx = (int32_t)in;
     int32_t cy = (243 * (hpf_y + cx - hpf_x)) >> 8;
@@ -190,6 +193,7 @@ static const float FEAT_WEIGHTS[FEAT_DIM] = {
 // ============================================================
 // SECTION 4: ADXL345 & I2S
 // ============================================================
+// Configure ADXL345 measurement mode, range and output data rate.
 static void adxl_init() {
     Wire.beginTransmission(ADXL_ADDR); Wire.write(0x2D); Wire.write(0x08); Wire.endTransmission();
     Wire.beginTransmission(ADXL_ADDR); Wire.write(0x31); Wire.write(0x00); Wire.endTransmission();
@@ -203,6 +207,7 @@ static void adxl_init() {
     else            Serial.printf("[ADXL] WARN id=0x%02X\n", id);
 }
 
+// Read one raw XYZ sample from ADXL345 data registers.
 static void adxl_read(int16_t& rx, int16_t& ry, int16_t& rz) {
     Wire.beginTransmission(ADXL_ADDR); Wire.write(0x32); Wire.endTransmission(false);
     Wire.requestFrom(ADXL_ADDR, 6);
@@ -213,6 +218,7 @@ static void adxl_read(int16_t& rx, int16_t& ry, int16_t& rz) {
     rz = (int16_t)((buf[5] << 8) | buf[4]);
 }
 
+// Configure I2S RX for the INMP441 microphone.
 static void i2s_init() {
     i2s_config_t cfg = {
         .mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -236,6 +242,7 @@ static void i2s_init() {
 // ============================================================
 // SECTION 5: SCALING
 // ============================================================
+// Scale one raw 19D feature vector using the scaler of the selected phase.
 static void apply_scale(const float* raw, float* out, AiMode mode) {
     for (int j = 0; j < MEL_DIM; j++) {
         float v = (raw[j] + 80.0f) / 80.0f;
@@ -268,6 +275,7 @@ static void apply_scale(const float* raw, float* out, AiMode mode) {
 // ============================================================
 // SECTION 6: TFLITE MODELS
 // ============================================================
+// Register the minimal TensorFlow Lite Micro operators used by the Autoencoder.
 static void init_resolver() {
     if (resolver_ready) return;
     resolver.AddFullyConnected();
@@ -277,6 +285,7 @@ static void init_resolver() {
     resolver_ready = true;
 }
 
+// Instantiate and allocate tensors for one TFLite Micro model.
 static bool load_one_model(const uint8_t* model_data, size_t model_len, uint8_t* arena, size_t arena_size, uint8_t* interp_buf, tflite::MicroInterpreter*& interp_out, const char* name) {
     if (interp_out) { interp_out->~MicroInterpreter(); interp_out = nullptr; }
     const tflite::Model* m = tflite::GetModel(model_data);
@@ -286,6 +295,7 @@ static bool load_one_model(const uint8_t* model_data, size_t model_len, uint8_t*
     return true;
 }
 
+// Load all three phase-specific Autoencoder models.
 static bool load_models() {
     bool ok = true;
     ok &= load_one_model(model_gentle_tflite, model_gentle_tflite_len, tensor_arena_gentle, TENSOR_ARENA_SIZE, interp_buf_gentle, interp_gentle, "GENTLE");
@@ -294,12 +304,16 @@ static bool load_models() {
     return ok;
 }
 
+// Quantize a normalized float into an int8 tensor value.
 static int8_t quant(float v, float scale, int32_t zp) { return (int8_t)constrain((int32_t)roundf(v / scale) + zp, -128, 127); }
+
+// Convert an int8 tensor value back to float for MAE calculation.
 static float dequant(int8_t v, float scale, int32_t zp) { return ((float)v - (float)zp) * scale; }
 
 // ============================================================
 // SECTION 7: CORE 0 AUDIO TASK
 // ============================================================
+// Core 0 task: capture audio, compute 13 log-Mel features and signal readiness.
 void audio_task(void*) {
     static float hann[FFT_SIZE];
     for (int i = 0; i < FFT_SIZE; i++) hann[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (FFT_SIZE - 1)));
@@ -368,6 +382,7 @@ void audio_task(void*) {
 // ============================================================
 // SECTION 8: CORE 1 VIBRATION TASK
 // ============================================================
+// Core 1 high-priority task: collect vibration statistics at a stable 1 ms cadence.
 void vib_task(void*) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(1);
@@ -405,6 +420,7 @@ void vib_task(void*) {
 // ============================================================
 // SECTION 9: CORE 1 AI TASK
 // ============================================================
+// Core 1 lower-priority task: fuse features, run inference and update alarm state.
 void ai_task(void*) {
     while (!audio_queue || !vib_queue || !model_mutex || !sync_events) vTaskDelay(10);
     Serial.println("[AI] Ready, waiting for both queues...");
@@ -584,6 +600,7 @@ void ai_task(void*) {
 static uint8_t  mqtt_last_state = 0;
 static uint32_t mqtt_last_send  = 0;
 
+// Publish compact MQTT telemetry only when needed or at heartbeat cadence.
 void mqtt_smart_publish() {
     MqttPayload p;
     if (xQueueReceive(mqtt_queue, &p, 0) != pdTRUE) return;
@@ -623,6 +640,7 @@ void mqtt_smart_publish() {
 // ============================================================
 // SECTION 11: SETUP & LOOP
 // ============================================================
+// Initialize network, sensors, TFLite models and FreeRTOS tasks.
 void setup() {
     Serial.begin(921600);
     delay(500);
@@ -682,6 +700,7 @@ void setup() {
     Serial.println("=== READY FINAL ===");
 }
 
+// Maintain MQTT connectivity and drain the telemetry queue.
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
         reconnect_mqtt();

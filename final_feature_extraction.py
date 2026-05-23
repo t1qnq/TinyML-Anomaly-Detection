@@ -155,6 +155,7 @@ def vibration_features(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarra
 
 
 def extract_file(wav_path: str | Path, csv_path: str | Path) -> tuple[list[np.ndarray], str | None]:
+    """Extract five one-second feature rows from a matched WAV/CSV pair."""
     audio = read_wav_int16_mono(wav_path)
     vib_df = pd.read_csv(csv_path, usecols=["X", "Y", "Z"], dtype=np.float32)
 
@@ -187,6 +188,7 @@ def extract_file(wav_path: str | Path, csv_path: str | Path) -> tuple[list[np.nd
 
 
 def feature_columns() -> list[str]:
+    """Return the fixed 19-column schema used by training and firmware."""
     return [f"mfe_{idx}" for idx in range(N_MELS)] + [
         "rms_x",
         "var_x",
@@ -198,6 +200,7 @@ def feature_columns() -> list[str]:
 
 
 def print_summary(df: pd.DataFrame) -> None:
+    """Print descriptive statistics to detect bad feature ranges early."""
     mel_cols = [f"mfe_{idx}" for idx in range(N_MELS)]
     vib_cols = ["rms_x", "var_x", "rms_y", "var_y", "rms_z", "var_z"]
 
@@ -209,6 +212,7 @@ def print_summary(df: pd.DataFrame) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line options for batch feature extraction."""
     parser = argparse.ArgumentParser(description="Extract TinyML training features")
     parser.add_argument("--data-dir", "--data_dir", default=DEFAULT_DATA_DIR)
     parser.add_argument("--out", default=DEFAULT_OUT_CSV)
@@ -217,6 +221,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Convert all collected sample pairs into the training feature CSV."""
     args = parse_args()
     wav_files = sorted(glob.glob(os.path.join(args.data_dir, "*.wav")))
     if args.limit_files > 0:

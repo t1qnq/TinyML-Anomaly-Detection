@@ -151,6 +151,7 @@ def next_sample_index(out_dir: Path, start_index: int) -> int:
 
 
 def print_stats(stats: dict[str, float]) -> None:
+    """Print compact signal-quality statistics for the current sample window."""
     print(
         "  vib: "
         f"rms=({stats['rms_x']:.4f}, {stats['rms_y']:.4f}, {stats['rms_z']:.4f})g "
@@ -160,6 +161,7 @@ def print_stats(stats: dict[str, float]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line options for serial data collection."""
     parser = argparse.ArgumentParser(description="Collect ESP32-S3 sensor data")
     parser.add_argument("--port", default="COM5")
     parser.add_argument("--baud", type=int, default=SERIAL_BAUD)
@@ -171,6 +173,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Run the collection loop until the requested sample count is reached."""
     args = parse_args()
     out_dir = Path(args.out)
     index = next_sample_index(out_dir, args.start_index)

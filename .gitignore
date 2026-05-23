@@ -20,6 +20,18 @@ __pycache__/
 dataset_v6/
 train_features_v6.csv
 
+# Local legacy/v2 sources kept for reference only.
+# The fix-v2 branch tracks the final entry points instead.
+dataCollection.py
+dataCollection/dataCollection.ino
+featureExtraction.py
+training.py
+training_v2.py
+firmware_v11/firmware_v11.ino
+firmware_v11/model_data.h
+firmware_v11/model_data_v2.h
+tinyml_app/scratch_test_mqtt.dart
+
 # Thesis/report artifacts are not part of fix-v2 source branch
 latex/
 latex_v2/

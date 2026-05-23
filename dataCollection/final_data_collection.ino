@@ -28,6 +28,7 @@ static QueueHandle_t packet_queue = nullptr;
 static int32_t hpf_prev_x = 0;
 static int32_t hpf_prev_y = 0;
 
+// Remove microphone DC offset before sending samples to the host.
 static int16_t high_pass_filter(int16_t x) {
     int32_t cx = (int32_t)x;
     int32_t cy = (243 * (hpf_prev_y + cx - hpf_prev_x)) >> 8;
@@ -36,6 +37,7 @@ static int16_t high_pass_filter(int16_t x) {
     return (int16_t)cy;
 }
 
+// Read one raw XYZ acceleration sample from ADXL345.
 static void read_adxl_raw(int16_t &x, int16_t &y, int16_t &z) {
     Wire.beginTransmission(ADXL345_ADDR);
     Wire.write(0x32);
@@ -51,6 +53,7 @@ static void read_adxl_raw(int16_t &x, int16_t &y, int16_t &z) {
     }
 }
 
+// Put ADXL345 into measurement mode with the project data-rate/range settings.
 static void setup_adxl345() {
     Wire.beginTransmission(ADXL345_ADDR);
     Wire.write(0x2D);
@@ -80,6 +83,7 @@ static void setup_adxl345() {
     }
 }
 
+// Configure I2S RX for streaming INMP441 microphone samples.
 static void setup_i2s() {
     i2s_config_t cfg = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -103,6 +107,7 @@ static void setup_i2s() {
     Serial.println("[I2S] OK");
 }
 
+// Capture task: sample ADXL345 and INMP441, then pack frames for serial output.
 static void capture_task(void*) {
     int32_t raw_i2s[AUDIO_CHUNK_SIZE];
     size_t bytes_read = 0;
@@ -146,6 +151,7 @@ static void capture_task(void*) {
     }
 }
 
+// Serial task: transmit binary packets to final_data_collection.py.
 static void serial_task(void*) {
     SensorPacket out;
     while (true) {
@@ -155,6 +161,7 @@ static void serial_task(void*) {
     }
 }
 
+// Initialize sensors, queues and the two FreeRTOS collection tasks.
 void setup() {
     Serial.begin(SERIAL_BAUD);
     delay(500);
@@ -176,6 +183,7 @@ void setup() {
     xTaskCreatePinnedToCore(serial_task, "SERIAL", 4096, NULL, 5, NULL, 1);
 }
 
+// All work runs in tasks; the Arduino loop only yields CPU time.
 void loop() {
     vTaskDelete(NULL);
 }

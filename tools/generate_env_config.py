@@ -25,6 +25,7 @@ REQUIRED_KEYS = (
 
 
 def parse_env(path: Path) -> dict[str, str]:
+    """Parse KEY=VALUE pairs while ignoring comments, blanks and UTF-8 BOM."""
     values: dict[str, str] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip().lstrip("\ufeff")
@@ -36,14 +37,17 @@ def parse_env(path: Path) -> dict[str, str]:
 
 
 def c_string(value: str) -> str:
+    """Escape a value so it is safe inside a generated C string literal."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def dart_string(value: str) -> str:
+    """Escape a value so it is safe inside a generated Dart string literal."""
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def require_values(values: dict[str, str]) -> None:
+    """Validate that all required config keys exist and MQTT_PORT is numeric."""
     missing = [key for key in REQUIRED_KEYS if not values.get(key)]
     if missing:
         raise SystemExit("Missing values in .env: " + ", ".join(missing))
@@ -54,6 +58,7 @@ def require_values(values: dict[str, str]) -> None:
 
 
 def write_firmware_config(values: dict[str, str], path: Path) -> None:
+    """Write the ignored Arduino header consumed by final_firmware.ino."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(
@@ -76,6 +81,7 @@ def write_firmware_config(values: dict[str, str], path: Path) -> None:
 
 
 def write_flutter_config(values: dict[str, str], path: Path) -> None:
+    """Write the ignored Flutter AppConfig class consumed by main.dart."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(
@@ -96,6 +102,7 @@ def write_flutter_config(values: dict[str, str], path: Path) -> None:
 
 
 def main() -> None:
+    """Generate both local config files from a single .env source."""
     parser = argparse.ArgumentParser(
         description="Generate local config files from .env"
     )
