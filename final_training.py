@@ -1,0 +1,562 @@
+"""Leakage-free tri-state Autoencoder training for ESP32-S3 TinyML.
+
+The script trains one Autoencoder per washing phase:
+  - GENTLE
+  - STRONG
+  - SPIN
+
+Key guarantees:
+  - raw windows are split into train/validation/test before augmentation
+  - vibration scalers are fit on train only
+  - test windows are never augmented
+  - phase switch thresholds can be computed by K-Means on raw var_z
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import warnings
+from dataclasses import dataclass
+from pathlib import Path
+
+os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
+import numpy as np
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import RobustScaler
+
+
+warnings.filterwarnings("ignore")
+
+tf = None
+tfmot = None
+layers = None
+models = None
+
+MEL_DIM = 13
+VIB_DIM = 6
+FEAT_DIM = 19
+VIB_START = MEL_DIM
+
+MEL_DB_MIN = -80.0
+MEL_DB_MAX = 0.0
+MEL_DB_RANGE = MEL_DB_MAX - MEL_DB_MIN
+
+WEIGHTS = np.array([1.0] * MEL_DIM + [5.0] * VIB_DIM, dtype=np.float32)
+WEIGHT_SUM = float(np.sum(WEIGHTS))
+
+PHASES = ("GENTLE", "STRONG", "SPIN")
+
+
+@dataclass
+class PhaseTrainResult:
+    model: tf.keras.Model
+    test_raw: np.ndarray
+    scaler: RobustScaler
+
+
+def load_training_dependencies() -> None:
+    """Import TensorFlow only when training is actually executed."""
+    global tf, tfmot, layers, models
+
+    import tensorflow as _tf
+    import tensorflow_model_optimization as _tfmot
+    from tensorflow.keras import layers as _layers
+    from tensorflow.keras import models as _models
+
+    tf = _tf
+    tfmot = _tfmot
+    layers = _layers
+    models = _models
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train final leakage-free TinyML models")
+    parser.add_argument("--csv", default="train_features_v6.csv")
+    parser.add_argument("--out-header", default="firmware_v11/model_data_final.h")
+    parser.add_argument("--results", default="results_final.json")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--test-size", type=float, default=0.20)
+    parser.add_argument("--val-size", type=float, default=0.15)
+    parser.add_argument(
+        "--phase-threshold-mode",
+        choices=["kmeans", "fixed"],
+        default="kmeans",
+        help="How to determine GENTLE/STRONG/SPIN routing thresholds from var_z.",
+    )
+    parser.add_argument("--fixed-var-z-thr1", type=float, default=0.105845)
+    parser.add_argument("--fixed-var-z-thr2", type=float, default=0.386260)
+    parser.add_argument(
+        "--anomaly-threshold-mode",
+        choices=["optimal_f1", "normal_percentile", "mean_std", "fixed"],
+        default="optimal_f1",
+        help="How to determine the MAE alarm threshold for each phase.",
+    )
+    parser.add_argument("--fixed-gentle", type=float, default=0.0468946621)
+    parser.add_argument("--fixed-strong", type=float, default=0.1076632291)
+    parser.add_argument("--fixed-spin", type=float, default=0.0989401191)
+    parser.add_argument("--gentle-target", type=int, default=20000)
+    parser.add_argument("--other-target", type=int, default=10000)
+    parser.add_argument("--float-epochs", type=int, default=200)
+    parser.add_argument("--qat-epochs", type=int, default=80)
+    return parser.parse_args()
+
+
+def set_reproducibility(seed: int) -> None:
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+
+
+def load_features(csv_path: str | Path) -> np.ndarray:
+    df = pd.read_csv(csv_path)
+    if df.shape[1] != FEAT_DIM:
+        raise ValueError(f"Expected {FEAT_DIM} feature columns, got {df.shape[1]}")
+    return df.values.astype(np.float32)
+
+
+def compute_phase_thresholds(
+    var_z: np.ndarray,
+    mode: str,
+    seed: int,
+    fixed_thr1: float,
+    fixed_thr2: float,
+) -> dict[str, object]:
+    """Return thresholds that route raw windows into three physical phases."""
+    if mode == "fixed":
+        return {
+            "mode": "fixed",
+            "thr1": float(fixed_thr1),
+            "thr2": float(fixed_thr2),
+            "centers": None,
+        }
+
+    values = var_z.reshape(-1, 1).astype(np.float32)
+    kmeans = KMeans(n_clusters=3, random_state=seed, n_init=20)
+    kmeans.fit(values)
+
+    centers = np.sort(kmeans.cluster_centers_.reshape(-1))
+    thr1 = float((centers[0] + centers[1]) / 2.0)
+    thr2 = float((centers[1] + centers[2]) / 2.0)
+    return {
+        "mode": "kmeans",
+        "thr1": thr1,
+        "thr2": thr2,
+        "centers": [float(v) for v in centers],
+    }
+
+
+def split_by_phase(x_raw: np.ndarray, thr1: float, thr2: float) -> dict[str, np.ndarray]:
+    var_z = x_raw[:, 18]
+    return {
+        "GENTLE": x_raw[var_z < thr1],
+        "STRONG": x_raw[(var_z >= thr1) & (var_z < thr2)],
+        "SPIN": x_raw[var_z >= thr2],
+    }
+
+
+def compute_vib_clip(x_raw: np.ndarray) -> dict[int, float]:
+    return {
+        14: float(np.percentile(x_raw[:, 14], 99)),
+        16: float(np.percentile(x_raw[:, 16], 99)),
+        18: float(np.max(x_raw[:, 18])),
+    }
+
+
+def apply_vib_clip(x_raw: np.ndarray, clip: dict[int, float]) -> np.ndarray:
+    out = x_raw.copy()
+    for column, cap in clip.items():
+        out[:, column] = np.clip(out[:, column], 0, cap)
+    return out
+
+
+def safe_robust_fit(data: np.ndarray) -> RobustScaler:
+    scaler = RobustScaler(quantile_range=(10, 90)).fit(data)
+    scaler.scale_ = np.maximum(scaler.scale_, 0.002)
+    return scaler
+
+
+def scale_subset(raw: np.ndarray, vib_scaler: RobustScaler) -> np.ndarray:
+    mel = np.clip((raw[:, :MEL_DIM] - MEL_DB_MIN) / MEL_DB_RANGE, 0, 1)
+    vib = vib_scaler.transform(raw[:, VIB_START:])
+    vib = np.clip(vib, -3, 3) / 6.0 + 0.5
+    return np.concatenate([mel, vib], axis=1).astype(np.float32)
+
+
+def augment_raw_data(x_raw: np.ndarray, target_size: int) -> np.ndarray:
+    """Augment physical-space data for denoising Autoencoder training."""
+    if len(x_raw) == 0:
+        return np.zeros((0, FEAT_DIM), dtype=np.float32)
+
+    repeat_factor = int(np.ceil(target_size / len(x_raw)))
+    x_aug = np.tile(x_raw, (repeat_factor, 1))[:target_size].copy()
+
+    vib_scales = np.random.uniform(0.8, 1.2, size=(target_size, 1))
+    x_aug[:, [13, 15, 17]] *= vib_scales
+    x_aug[:, [14, 16, 18]] *= vib_scales ** 2
+
+    audio_shifts = np.random.uniform(-5.0, 2.0, size=(target_size, 1))
+    x_aug[:, :MEL_DIM] += audio_shifts
+    x_aug[:, :MEL_DIM] = np.clip(x_aug[:, :MEL_DIM], MEL_DB_MIN, MEL_DB_MAX)
+
+    x_aug[:, :MEL_DIM] += np.random.normal(0, 0.3, size=(target_size, MEL_DIM))
+    x_aug[:, VIB_START:] += np.random.normal(0, 0.0005, size=(target_size, VIB_DIM))
+    return x_aug.astype(np.float32)
+
+
+def weighted_mae(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    weights = tf.constant(WEIGHTS, dtype=tf.float32)
+    return tf.reduce_sum(tf.abs(y_true - y_pred) * weights, axis=-1) / WEIGHT_SUM
+
+
+def build_model() -> tf.keras.Model:
+    return models.Sequential(
+        [
+            layers.Input(shape=(FEAT_DIM,)),
+            layers.Dense(128, activation="sigmoid"),
+            layers.Dense(64, activation="sigmoid"),
+            layers.Dense(32, activation="sigmoid"),
+            layers.Dense(64, activation="sigmoid"),
+            layers.Dense(128, activation="sigmoid"),
+            layers.Dense(FEAT_DIM, activation="sigmoid"),
+        ]
+    )
+
+
+def train_phase(
+    x_raw: np.ndarray,
+    phase: str,
+    args: argparse.Namespace,
+) -> PhaseTrainResult:
+    if len(x_raw) < 10:
+        raise ValueError(f"{phase}: not enough samples ({len(x_raw)})")
+
+    train_raw, test_raw = train_test_split(
+        x_raw,
+        test_size=args.test_size,
+        random_state=args.seed,
+        shuffle=True,
+    )
+    train_sub_raw, val_raw = train_test_split(
+        train_raw,
+        test_size=args.val_size,
+        random_state=args.seed,
+        shuffle=True,
+    )
+
+    target = args.gentle_target if phase == "GENTLE" else args.other_target
+    target_train = int(target * (1.0 - args.val_size))
+    target_val = target - target_train
+
+    scaler = safe_robust_fit(train_sub_raw[:, VIB_START:])
+    train_clean = scale_subset(augment_raw_data(train_sub_raw, target_train), scaler)
+    val_clean = scale_subset(augment_raw_data(val_raw, target_val), scaler)
+
+    train_noisy = np.clip(
+        train_clean + np.random.normal(0, 0.02, train_clean.shape).astype(np.float32),
+        0,
+        1,
+    )
+    val_noisy = np.clip(
+        val_clean + np.random.normal(0, 0.02, val_clean.shape).astype(np.float32),
+        0,
+        1,
+    )
+
+    model = build_model()
+    model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss=weighted_mae)
+    model.fit(
+        train_noisy,
+        train_clean,
+        epochs=args.float_epochs,
+        batch_size=64,
+        validation_data=(val_noisy, val_clean),
+        verbose=0,
+        callbacks=[tf.keras.callbacks.EarlyStopping(patience=20, restore_best_weights=True)],
+    )
+
+    qat_model = tfmot.quantization.keras.quantize_model(model)
+    qat_model.compile(optimizer=tf.keras.optimizers.Adam(1e-4), loss=weighted_mae)
+    qat_model.fit(
+        train_noisy,
+        train_clean,
+        epochs=args.qat_epochs,
+        batch_size=64,
+        validation_data=(val_noisy, val_clean),
+        verbose=0,
+        callbacks=[tf.keras.callbacks.EarlyStopping(patience=15, restore_best_weights=True)],
+    )
+
+    qat_model.save(f"model_{phase.lower()}_best_final.h5")
+    print(
+        f"{phase}: train={len(train_sub_raw)} val={len(val_raw)} test={len(test_raw)}"
+    )
+    return PhaseTrainResult(qat_model, test_raw, scaler)
+
+
+def synthesize_anomalies(x_raw: np.ndarray, phase: str) -> np.ndarray:
+    """Create controlled anomaly-injection data from held-out test windows."""
+    x_anom = x_raw.copy()
+    n = len(x_anom)
+    strength = 1.5 if phase == "GENTLE" else 1.0
+
+    x_anom[:, 17] *= np.random.uniform(3.0 * strength, 6.0 * strength, size=n)
+    x_anom[:, 18] *= np.random.uniform(7.0 * strength, 15.0 * strength, size=n)
+    x_anom[:, [13, 15]] += np.random.uniform(
+        0.2 * strength,
+        0.6 * strength,
+        size=(n, 2),
+    )
+    x_anom[:, :MEL_DIM] += np.random.uniform(
+        8.0 * strength,
+        15.0 * strength,
+        size=(n, MEL_DIM),
+    )
+    x_anom[:, :MEL_DIM] = np.clip(x_anom[:, :MEL_DIM], MEL_DB_MIN, MEL_DB_MAX)
+    return x_anom.astype(np.float32)
+
+
+def convert_to_int8(qat_model: tf.keras.Model, representative_data: np.ndarray) -> bytes:
+    def representative_gen():
+        for i in range(min(100, len(representative_data))):
+            yield [representative_data[i : i + 1].astype(np.float32)]
+
+    converter = tf.lite.TFLiteConverter.from_keras_model(qat_model)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    converter.inference_input_type = tf.int8
+    converter.inference_output_type = tf.int8
+    converter.representative_dataset = representative_gen
+    return converter.convert()
+
+
+def run_tflite_mae(model_bytes: bytes, data: np.ndarray) -> np.ndarray:
+    interpreter = tf.lite.Interpreter(model_content=model_bytes)
+    interpreter.allocate_tensors()
+
+    input_detail = interpreter.get_input_details()[0]
+    output_detail = interpreter.get_output_details()[0]
+    input_scale, input_zero = input_detail["quantization"]
+    output_scale, output_zero = output_detail["quantization"]
+
+    maes: list[float] = []
+    for x in data:
+        x_int8 = np.clip(np.round(x / input_scale) + input_zero, -128, 127)
+        x_int8 = x_int8.astype(np.int8).reshape(1, FEAT_DIM)
+        interpreter.set_tensor(input_detail["index"], x_int8)
+        interpreter.invoke()
+
+        y_int8 = interpreter.get_tensor(output_detail["index"]).reshape(FEAT_DIM)
+        y_float = np.clip((y_int8.astype(np.float32) - output_zero) * output_scale, 0, 1)
+        x_float = np.clip((x_int8.reshape(FEAT_DIM).astype(np.float32) - input_zero) * input_scale, 0, 1)
+        maes.append(float(np.sum(np.abs(x_float - y_float) * WEIGHTS) / WEIGHT_SUM))
+    return np.asarray(maes, dtype=np.float32)
+
+
+def choose_anomaly_threshold(
+    maes_normal: np.ndarray,
+    maes_anomaly: np.ndarray,
+    phase: str,
+    mode: str,
+    fixed_value: float | None,
+) -> tuple[float, str]:
+    labels = np.concatenate(
+        [np.zeros(len(maes_normal), dtype=np.int32), np.ones(len(maes_anomaly), dtype=np.int32)]
+    )
+    scores = np.concatenate([maes_normal, maes_anomaly])
+
+    if mode == "fixed":
+        if fixed_value is None:
+            raise ValueError(f"{phase}: fixed threshold is missing")
+        return float(fixed_value), "fixed"
+
+    if mode == "normal_percentile":
+        percentile = 95 if phase == "GENTLE" else 98
+        return float(np.percentile(maes_normal, percentile)), f"normal_p{percentile}"
+
+    if mode == "mean_std":
+        return float(np.mean(maes_normal) + 3.0 * np.std(maes_normal)), "mean_plus_3std"
+
+    thresholds = np.linspace(np.min(maes_normal), np.max(maes_anomaly), 200)
+    best_thr = float(thresholds[0])
+    best_f1 = -1.0
+    for threshold in thresholds:
+        preds = (scores > threshold).astype(np.int32)
+        current_f1 = f1_score(labels, preds)
+        if current_f1 > best_f1:
+            best_f1 = current_f1
+            best_thr = float(threshold)
+    return best_thr, "optimal_f1"
+
+
+def evaluate_phase(
+    phase: str,
+    result: PhaseTrainResult,
+    args: argparse.Namespace,
+) -> tuple[bytes, float, dict[str, float | str]]:
+    normal_scaled = scale_subset(result.test_raw, result.scaler)
+    anomaly_scaled = scale_subset(synthesize_anomalies(result.test_raw, phase), result.scaler)
+    model_bytes = convert_to_int8(result.model, normal_scaled)
+
+    maes_normal = run_tflite_mae(model_bytes, normal_scaled)
+    maes_anomaly = run_tflite_mae(model_bytes, anomaly_scaled)
+
+    fixed_thresholds = {
+        "GENTLE": args.fixed_gentle,
+        "STRONG": args.fixed_strong,
+        "SPIN": args.fixed_spin,
+    }
+    threshold, threshold_method = choose_anomaly_threshold(
+        maes_normal,
+        maes_anomaly,
+        phase,
+        args.anomaly_threshold_mode,
+        fixed_thresholds[phase],
+    )
+
+    labels = np.concatenate(
+        [np.zeros(len(maes_normal), dtype=np.int32), np.ones(len(maes_anomaly), dtype=np.int32)]
+    )
+    scores = np.concatenate([maes_normal, maes_anomaly])
+    preds = (scores > threshold).astype(np.int32)
+
+    metrics: dict[str, float | str] = {
+        "threshold": float(threshold),
+        "threshold_method": threshold_method,
+        "f1": float(f1_score(labels, preds)),
+        "precision": float(precision_score(labels, preds)),
+        "recall": float(recall_score(labels, preds)),
+        "auc": float(roc_auc_score(labels, scores)),
+        "normal_mae_mean": float(np.mean(maes_normal)),
+        "anomaly_mae_mean": float(np.mean(maes_anomaly)),
+    }
+
+    print(
+        f"{phase}: threshold={threshold:.6f} "
+        f"f1={metrics['f1']:.4f} precision={metrics['precision']:.4f} "
+        f"recall={metrics['recall']:.4f} auc={metrics['auc']:.4f}"
+    )
+    return model_bytes, threshold, metrics
+
+
+def c_array(data: bytes, name: str) -> str:
+    rows = []
+    for start in range(0, len(data), 12):
+        chunk = data[start : start + 12]
+        rows.append("  " + ", ".join(f"0x{byte:02x}" for byte in chunk))
+    body = ",\n".join(rows)
+    return (
+        f"const unsigned char {name}[] __attribute__((aligned(16))) = {{\n"
+        f"{body}\n"
+        f"}};\n"
+        f"const unsigned int {name}_len = {len(data)};\n\n"
+    )
+
+
+def c_floats(values: np.ndarray) -> str:
+    return ", ".join(f"{float(v):.10f}f" for v in values)
+
+
+def write_model_header(
+    path: str | Path,
+    phase_cfg: dict[str, object],
+    vib_clip: dict[int, float],
+    scalers: dict[str, RobustScaler],
+    thresholds: dict[str, float],
+    models_bytes: dict[str, bytes],
+) -> None:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    header = "#ifndef MODEL_DATA_FINAL_H\n#define MODEL_DATA_FINAL_H\n\n"
+    header += "// Generated by final_training.py\n\n"
+    header += f"const float VAR_Z_THR1 = {float(phase_cfg['thr1']):.10f}f;\n"
+    header += f"const float VAR_Z_THR2 = {float(phase_cfg['thr2']):.10f}f;\n\n"
+    header += f"const float THRESHOLD_GENTLE = {thresholds['GENTLE']:.10f}f;\n"
+    header += f"const float THRESHOLD_STRONG = {thresholds['STRONG']:.10f}f;\n"
+    header += f"const float THRESHOLD_SPIN   = {thresholds['SPIN']:.10f}f;\n\n"
+    header += f"const float MEL_MIN[{MEL_DIM}]   = {{{c_floats(np.full(MEL_DIM, MEL_DB_MIN))}}};\n"
+    header += f"const float MEL_SCALE[{MEL_DIM}] = {{{c_floats(np.full(MEL_DIM, MEL_DB_RANGE))}}};\n\n"
+
+    for phase in PHASES:
+        scaler = scalers[phase]
+        header += f"const float VIB_CENTER_{phase}[{VIB_DIM}] = {{{c_floats(scaler.center_)}}};\n"
+        header += f"const float VIB_SCALE_{phase}[{VIB_DIM}]  = {{{c_floats(scaler.scale_)}}};\n"
+    header += "\n"
+    header += f"const float VIB_CLIP_VAR_X = {vib_clip[14]:.10f}f;\n"
+    header += f"const float VIB_CLIP_VAR_Y = {vib_clip[16]:.10f}f;\n"
+    header += f"const float VIB_CLIP_VAR_Z = {vib_clip[18]:.10f}f;\n\n"
+
+    header += c_array(models_bytes["GENTLE"], "model_gentle_tflite")
+    header += c_array(models_bytes["STRONG"], "model_strong_tflite")
+    header += c_array(models_bytes["SPIN"], "model_spin_tflite")
+    header += "#endif\n"
+    out.write_text(header, encoding="utf-8")
+
+
+def main() -> None:
+    args = parse_args()
+    load_training_dependencies()
+    set_reproducibility(args.seed)
+
+    x_raw_original = load_features(args.csv)
+    phase_cfg = compute_phase_thresholds(
+        x_raw_original[:, 18],
+        mode=args.phase_threshold_mode,
+        seed=args.seed,
+        fixed_thr1=args.fixed_var_z_thr1,
+        fixed_thr2=args.fixed_var_z_thr2,
+    )
+
+    vib_clip = compute_vib_clip(x_raw_original)
+    x_raw = apply_vib_clip(x_raw_original, vib_clip)
+    phase_data = split_by_phase(x_raw, float(phase_cfg["thr1"]), float(phase_cfg["thr2"]))
+
+    print("Phase switch:")
+    print(json.dumps(phase_cfg, indent=2))
+    for phase in PHASES:
+        print(f"{phase}: {len(phase_data[phase])} raw windows")
+
+    train_results: dict[str, PhaseTrainResult] = {}
+    for phase in PHASES:
+        train_results[phase] = train_phase(phase_data[phase], phase, args)
+
+    models_bytes: dict[str, bytes] = {}
+    thresholds: dict[str, float] = {}
+    metrics: dict[str, dict[str, float | str]] = {}
+    for phase in PHASES:
+        model_bytes, threshold, phase_metrics = evaluate_phase(phase, train_results[phase], args)
+        models_bytes[phase] = model_bytes
+        thresholds[phase] = threshold
+        metrics[phase] = phase_metrics
+
+    scalers = {phase: train_results[phase].scaler for phase in PHASES}
+    write_model_header(args.out_header, phase_cfg, vib_clip, scalers, thresholds, models_bytes)
+
+    results = {
+        "version": "final_leakage_free",
+        "seed": args.seed,
+        "split": {
+            "test_size": args.test_size,
+            "val_size": args.val_size,
+        },
+        "phase_switch": phase_cfg,
+        "anomaly_threshold_mode": args.anomaly_threshold_mode,
+        "thresholds": thresholds,
+        "phases": metrics,
+    }
+    Path(args.results).write_text(
+        json.dumps(results, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print(f"Wrote {args.out_header}")
+    print(f"Wrote {args.results}")
+
+
+if __name__ == "__main__":
+    main()

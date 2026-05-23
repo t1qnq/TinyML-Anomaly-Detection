@@ -1,20 +1,32 @@
-# Bỏ qua file build của App Flutter
+# Flutter build artifacts
 tinyml_app/build/
 tinyml_app/.dart_tool/
 tinyml_app/android/.gradle/
 
-# Bỏ qua file rác của Firmware
+# Local configuration generated from .env
+.env
+firmware_v11/env_config.h
+tinyml_app/lib/app_config.dart
+
+# Firmware build artifacts
 firmware_v10/.pio/
 firmware_v10/build/
 
-# Bỏ qua file cache của Python
+# Python cache
 __pycache__/
 *.pyc
 
-# QUAN TRỌNG: Chặn thư mục dataset nếu nó nặng hơn 100MB
+# Local dataset and extracted features
 dataset_v6/
+train_features_v6.csv
 
-# Bỏ qua file build tạm của LaTeX
+# Thesis/report artifacts are not part of fix-v2 source branch
+latex/
+latex_v2/
+slides/
+doc/
+
+# LaTeX temporary files, kept for safety if report folders are restored locally
 latex/*.aux
 latex/*.bbl
 latex/*.blg
@@ -31,11 +43,29 @@ latex/*.toc
 latex/web.*
 latex/overview/*.aux
 
-# Bỏ qua file local/tạm trong quá trình rà soát
+# Local review/workspace files
+.vscode/
 .claude/
 fix_ref/
 doc/images/
+docs/superpowers/plans/
 
-# Bỏ qua artifact mô hình và log đo đạc tạm
+# Demo/video artifacts
+demo_video_assets/
+demo_raw.mp4
+demo_video_final*.mp4
+DEMO_PLAN.md
+DEMO_VIDEO_*.md
+demo_video_subtitles.srt
+
+# Generated analysis and plot artifacts
+*.png
+*.jpg
+*.svg
+results_v2.json
+results_final.json
+experiment_results.json
+
+# Temporary model and measurement artifacts
 *.h5
 serial_output.txt

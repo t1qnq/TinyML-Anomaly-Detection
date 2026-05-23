@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:mqtt_client/mqtt_client.dart';
 import 'mqtt_factory.dart'
     if (dart.library.js_interop) 'mqtt_factory_web.dart'
     as mqtt_factory;
+import 'app_config.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -16,17 +16,17 @@ import 'package:fl_chart/fl_chart.dart';
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const String kBroker    = '0a6070814ed640d2bf2200eb24c6b80e.s1.eu.hivemq.cloud';
-const String kTopic = 'tinyml/quang_wm_2026/status';
-const int    kPort      = 8883;
+const String kBroker = AppConfig.broker;
+const String kTopic = AppConfig.topic;
+const int    kPort = AppConfig.port;
 const int    kHeartbeatTimeout = 60; // seconds
 const int    kAlarmWindow      = 10;  // sliding window size
-const int    kAlarmEnterThr    = 5;   // 5/10 HIGH → ALARM
-const int    kAlarmExitThr     = 1;   // ≤1/10 HIGH (9 OK) → thoát
+const int    kAlarmEnterThr    = 5;   // 5/10 HIGH -> ALARM
+const int    kAlarmExitThr     = 1;   // <=1/10 HIGH means 9 OK -> exit
 const int    kMaxMaeHistory    = 40;
 const int    kMaxHistory       = 30;
 
-// MAE thresholds per mode (phải khớp firmware)
+// MAE thresholds per mode. Keep these values aligned with model_data_final.h.
 const Map<String, double> kThresholds = {
   'GENTLE': 0.0469,
   'STRONG': 0.1077,
@@ -203,16 +203,28 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
   int _alarmCount = 0;
   DateTime? _connectedAt;
 
-  // History 
-  List<AlarmEvent>  _events      = [];
-  List<double>      _maeHistory  = [];
-  List<WashMode>    _modeHistory = [];
-  List<int>         _uptimeSegs  = [];
+  // History
+  final List<AlarmEvent> _events = [];
+  final List<double> _maeHistory = [];
+  final List<WashMode> _modeHistory = [];
+  final List<int> _uptimeSegs = [];
 
   // Phase counters
-  Map<WashMode, int>    _phaseCount      = { WashMode.gentle: 0, WashMode.strong: 0, WashMode.spin: 0 };
-  Map<WashMode, int>    _phaseAlarmCount = { WashMode.gentle: 0, WashMode.strong: 0, WashMode.spin: 0 };
-  Map<WashMode, double> _phaseMaeSum     = { WashMode.gentle: 0.0, WashMode.strong: 0.0, WashMode.spin: 0.0 };
+  final Map<WashMode, int> _phaseCount = {
+    WashMode.gentle: 0,
+    WashMode.strong: 0,
+    WashMode.spin: 0,
+  };
+  final Map<WashMode, int> _phaseAlarmCount = {
+    WashMode.gentle: 0,
+    WashMode.strong: 0,
+    WashMode.spin: 0,
+  };
+  final Map<WashMode, double> _phaseMaeSum = {
+    WashMode.gentle: 0.0,
+    WashMode.strong: 0.0,
+    WashMode.spin: 0.0,
+  };
 
   // Heartbeat
   Timer? _heartbeatTimer;
@@ -226,7 +238,6 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
   late Animation<double>   _alarmGlow;
 
   @override
-  @override
   void initState() {
     super.initState();
 
@@ -239,15 +250,12 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
       CurvedAnimation(parent: _alarmAnim, curve: Curves.easeInOut),
     );
 
-    // --- THÊM ĐOẠN NÀY VÀO ---
-    // Cứ 1 giây sẽ ép giao diện cập nhật 1 lần
+    // Refresh the statistics tab once per second while connected.
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      // Tối ưu hóa: Chỉ gọi setState khi app đang mở và người dùng đang ở Tab Thống kê (_tabIndex == 2)
       if (mounted && _tabIndex == 2 && _isConnected) {
         setState(() {}); 
       }
     });
-    // -------------------------
 
     _connectMQTT();
   }
@@ -307,7 +315,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
 
     final connMess = MqttConnectMessage()
         .withClientIdentifier(clientID)
-        .authenticateAs('project1', 'Abcd2705@') // Authenticate với HiveMQ Cloud
+        .authenticateAs(AppConfig.username, AppConfig.password)
         .startClean();
     _client!.connectionMessage = connMess;
 
@@ -606,18 +614,18 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
     return Center(
       child: AnimatedBuilder(
         animation: _alarmAnim,
-        builder: (_, __) {
+        builder: (context, child) {
           final glow = _status == MachineStatus.alarm
               ? _alarmGlow.value : 0.1;
           return Container(
             width: 200, height: 200,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: color.withOpacity(glow * 0.5),
-              border: Border.all(color: color.withOpacity(0.4), width: 3),
+              color: color.withValues(alpha: glow * 0.5),
+              border: Border.all(color: color.withValues(alpha: 0.4), width: 3),
               boxShadow: [
                 BoxShadow(
-                  color: color.withOpacity(glow),
+                  color: color.withValues(alpha: glow),
                   blurRadius: 40, spreadRadius: 4,
                 ),
               ],
@@ -638,7 +646,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
                     padding: const EdgeInsets.only(top: 4),
                     child: Text('MAE ${_currentMae.toStringAsFixed(4)}',
                         style: TextStyle(
-                          fontSize: 12, color: color.withOpacity(0.8),
+                          fontSize: 12, color: color.withValues(alpha: 0.8),
                           fontFamily: 'monospace',
                         )),
                   ),
@@ -804,7 +812,7 @@ class _MonitorScreenStateV2 extends State<MonitorScreen>
               leading: Container(
                 width: 38, height: 38,
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
+                  color: color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Center(child: Text(icon)),
@@ -852,8 +860,6 @@ class _ChartTab extends StatelessWidget {
     final spots = maeHistory.asMap().entries
         .map((e) => FlSpot(e.key.toDouble(), e.value))
         .toList();
-
-    final thr = kThresholds[mode.label] ?? 0.15;
 
     return ListView(
       padding: const EdgeInsets.all(20),
@@ -931,7 +937,7 @@ class _ChartTab extends StatelessWidget {
                       ),
                       dotData: FlDotData(
                         show: true,
-                        getDotPainter: (spot, _, __, ___) {
+                        getDotPainter: (spot, percentage, bar, index) {
                           final idx = spot.x.toInt();
                           // Lấy màu theo mode tại điểm đó
                           final dotMode = (idx >= 0 && idx < modeHistory.length)
@@ -1174,9 +1180,9 @@ class _ConnBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
@@ -1203,9 +1209,9 @@ class _InfoBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: Row(children: [
         Text(icon, style: const TextStyle(fontSize: 16)),
@@ -1273,7 +1279,7 @@ class _PhaseCell extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: isActive ? mode.color.withOpacity(0.1) : const Color(0xFF181D2A),
+          color: isActive ? mode.color.withValues(alpha: 0.1) : const Color(0xFF181D2A),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: isActive ? mode.color : const Color(0x12FFFFFF),
@@ -1326,7 +1332,7 @@ class _StatCard extends StatelessWidget {
         Text(sub,
             style: const TextStyle(fontSize: 10, color: Color(0xFF6B7285),
                 fontFamily: 'monospace')),
-        if (extra != null) extra!,
+        ?extra,
       ]),
     );
   }
