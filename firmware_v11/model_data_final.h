@@ -2,6 +2,12 @@
 #define MODEL_DATA_FINAL_H
 
 // Final leakage-free INT8 model bundle. Regenerate with final_training.py.
+//
+// Phase switch thresholds are not hand-picked constants.
+// They are K-Means decision boundaries computed from all 14,000 raw feature
+// windows in train_features_v6.csv, using column 18 (var_z):
+//   VAR_Z_THR1 = boundary between GENTLE and STRONG clusters
+//   VAR_Z_THR2 = boundary between STRONG and SPIN clusters
 
 const float VAR_Z_THR1 = 0.1058450000f;
 const float VAR_Z_THR2 = 0.3862600000f;

@@ -368,13 +368,15 @@ Các chế độ quan trọng:
 | Tham số | Giá trị | Ý nghĩa |
 |---|---|---|
 | `--phase-threshold-mode` | `kmeans` | Tính ngưỡng chuyển pha bằng K-Means trên `var_z` |
-| `--phase-threshold-mode` | `fixed` | Dùng ngưỡng cố định `0.105845`, `0.386260` |
+| `--phase-threshold-mode` | `fixed` | Tái lập đúng hai ngưỡng K-Means đã tính từ 14.000 mẫu gốc: `0.105845`, `0.386260` |
 | `--anomaly-threshold-mode` | `optimal_f1` | Chọn ngưỡng MAE tối ưu theo F1 trên đánh giá offline |
 | `--anomaly-threshold-mode` | `normal_percentile` | Chọn ngưỡng theo percentile của normal MAE |
 | `--anomaly-threshold-mode` | `mean_std` | Chọn ngưỡng theo trung bình + độ lệch chuẩn |
 | `--anomaly-threshold-mode` | `fixed` | Dùng ngưỡng truyền vào qua `--fixed-*` |
 
-Nếu muốn tái lập đúng ngưỡng đang dùng trong header/app:
+Lưu ý về hai ngưỡng chuyển pha: `0.105845` và `0.386260` không phải số chọn tay. Đây là hai ranh giới cụm thu được bằng K-Means trên cột `var_z` của toàn bộ 14.000 vector đặc trưng gốc trong `train_features_v6.csv`. Chế độ `fixed` chỉ dùng để tái lập đúng thí nghiệm v2 đã báo cáo.
+
+Nếu muốn tái lập đúng ngưỡng MAE đang dùng trong header/app:
 
 ```powershell
 python final_training.py `
@@ -395,8 +397,8 @@ results_final.json
 
 `model_data_final.h` chứa:
 
-- `VAR_Z_THR1`
-- `VAR_Z_THR2`
+- `VAR_Z_THR1`: ranh giới K-Means giữa cụm `GENTLE` và `STRONG`
+- `VAR_Z_THR2`: ranh giới K-Means giữa cụm `STRONG` và `SPIN`
 - `THRESHOLD_GENTLE`
 - `THRESHOLD_STRONG`
 - `THRESHOLD_SPIN`
