@@ -8,8 +8,6 @@
 
 Hệ thống Edge AI/TinyML giám sát trạng thái máy giặt theo thời gian thực. Thiết bị dùng microphone INMP441 và cảm biến rung ADXL345 để tạo vector đặc trưng 19 chiều, chạy Autoencoder INT8 trực tiếp trên Seeed Studio XIAO ESP32-S3, sau đó gửi trạng thái qua MQTT cho ứng dụng Flutter hiển thị.
 
-Nhánh `fix-v2` là bản source code đã làm sạch cho triển khai cuối. Các file LaTeX, slide, dữ liệu thô, ảnh biểu đồ, video demo và output huấn luyện không được đưa lên nhánh này.
-
 ## Mục lục
 
 - [Tổng quan](#tổng-quan)
