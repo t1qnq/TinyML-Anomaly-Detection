@@ -1,4 +1,4 @@
-# TinyML Anomaly Detection for Washing Machines
+# Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên
 
 ![Hardware](https://img.shields.io/badge/Hardware-XIAO_ESP32S3-blue?style=flat-square&logo=espressif)
 ![AI](https://img.shields.io/badge/AI-TFLite_Micro-orange?style=flat-square&logo=tensorflow)
@@ -684,7 +684,7 @@ Các file trên là dữ liệu cục bộ hoặc artifact sinh ra trong quá tr
 ## Tác giả
 
 Quách Ngọc Quang<br>
-Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên.
+Đề tài: Thiết kế hệ thống AIoT phát hiện và cảnh báo bất thường cho máy giặt dân dụng sử dụng Autoencoder không giám sát trên thiết bị biên.
 
 ## Giảng viên hướng dẫn
 
