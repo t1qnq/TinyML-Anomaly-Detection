@@ -95,9 +95,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-header", default="firmware_v11/model_data_final.h")
     parser.add_argument("--results", default="results_final.json")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train-size", type=float, default=0.65)
+    parser.add_argument("--calibration-size", type=float, default=0.15)
     parser.add_argument("--test-size", type=float, default=0.20)
     parser.add_argument("--val-size", type=float, default=0.15)
-    parser.add_argument("--calibration-size", type=float, default=0.15)
     parser.add_argument("--gentle-target", type=int, default=20000)
     parser.add_argument("--other-target", type=int, default=10000)
     parser.add_argument("--float-epochs", type=int, default=200)
@@ -143,6 +144,43 @@ def split_by_phase(x_raw: np.ndarray, thr1: float, thr2: float) -> dict[str, np.
         "STRONG": x_raw[(var_z >= thr1) & (var_z < thr2)],
         "SPIN": x_raw[var_z >= thr2],
     }
+
+
+def split_train_calibration_test(
+    x_raw: np.ndarray,
+    phase: str,
+    args: argparse.Namespace,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split one phase into independent train/calibration/final-test partitions."""
+    train_size = float(args.train_size)
+    calibration_size = float(args.calibration_size)
+    test_size = float(args.test_size)
+    total_size = train_size + calibration_size + test_size
+    if not np.isclose(total_size, 1.0):
+        raise ValueError(
+            f"{phase}: train/calibration/test sizes must sum to 1.0, got {total_size:.4f}"
+        )
+    if min(train_size, calibration_size, test_size) <= 0.0:
+        raise ValueError(f"{phase}: split sizes must be positive")
+
+    train_calib_raw, test_raw = train_test_split(
+        x_raw,
+        test_size=test_size,
+        random_state=args.seed,
+        shuffle=True,
+    )
+    calibration_count = int(np.ceil(len(x_raw) * calibration_size))
+    if not 0 < calibration_count < len(train_calib_raw):
+        raise ValueError(
+            f"{phase}: invalid calibration count {calibration_count} for {len(x_raw)} samples"
+        )
+    train_raw, calibration_raw = train_test_split(
+        train_calib_raw,
+        test_size=calibration_count,
+        random_state=args.seed,
+        shuffle=True,
+    )
+    return train_raw, calibration_raw, test_raw
 
 
 def compute_vib_clip(x_raw: np.ndarray) -> dict[int, float]:
@@ -234,23 +272,7 @@ def train_phase(
     if len(x_raw) < 10:
         raise ValueError(f"{phase}: not enough samples ({len(x_raw)})")
 
-    train_raw, test_raw = train_test_split(
-        x_raw,
-        test_size=args.test_size,
-        random_state=args.seed,
-        shuffle=True,
-    )
-    calibration_ratio = args.calibration_size / (1.0 - args.test_size)
-    if not 0.0 < calibration_ratio < 1.0:
-        raise ValueError(
-            f"{phase}: calibration_size must be inside the train/validation pool"
-        )
-    _, calibration_raw = train_test_split(
-        train_raw,
-        test_size=calibration_ratio,
-        random_state=args.seed,
-        shuffle=True,
-    )
+    train_raw, calibration_raw, test_raw = split_train_calibration_test(x_raw, phase, args)
     train_sub_raw, val_raw = train_test_split(
         train_raw,
         test_size=args.val_size,
@@ -305,8 +327,8 @@ def train_phase(
 
     qat_model.save(f"model_{phase.lower()}_best_final.h5")
     print(
-        f"{phase}: train={len(train_sub_raw)} val={len(val_raw)} "
-        f"calibration={len(calibration_raw)} test={len(test_raw)}"
+        f"{phase}: train_pool={len(train_raw)} train={len(train_sub_raw)} "
+        f"val={len(val_raw)} calibration={len(calibration_raw)} test={len(test_raw)}"
     )
     return PhaseTrainResult(qat_model, calibration_raw, test_raw, scaler)
 
@@ -532,11 +554,11 @@ def main() -> None:
         "version": "final_leakage_free",
         "seed": args.seed,
         "split": {
-            "train_val": 1.0 - args.test_size,
+            "train_val": args.train_size,
+            "calibration": args.calibration_size,
             "final_test": args.test_size,
             "val_size": args.val_size,
-            "calibration_subset": "post_training_subset_inside_train_val",
-            "calibration_size": args.calibration_size,
+            "calibration_subset": "independent_normal_calibration_partition",
         },
         "phase_switch": phase_cfg,
         "anomaly_threshold_mode": "mu_plus_3sigma_calibration",

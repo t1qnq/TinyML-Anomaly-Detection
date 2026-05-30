@@ -43,7 +43,7 @@ Các quyết định thiết kế chính:
 
 ## Kết quả final
 
-Kết quả đánh giá offline trên final test sau khi ngưỡng đã được khóa bằng calibration subset:
+Kết quả đánh giá offline trên final test 20% sau khi ngưỡng đã được khóa bằng calibration subset 15%:
 
 | Pha | Threshold MAE | F1-Score | Precision | Recall | AUC |
 |---|---:|---:|---:|---:|---:|
@@ -63,7 +63,7 @@ Các thông số triển khai:
 | Biến global/static RAM | khoảng 62 KB |
 | Tần suất publish MQTT | tối đa 1 Hz hoặc khi đổi trạng thái |
 
-Lưu ý diễn giải: ngưỡng triển khai được khóa bằng công thức `mu + 3 sigma` trên calibration subset normal. Lỗi giả lập chỉ dùng ở bước đánh giá cuối trên final test; các chỉ số trên không nên diễn giải như một benchmark độc lập tuyệt đối trên thiết bị/máy giặt khác.
+Lưu ý diễn giải: dữ liệu được tách theo tỷ lệ 65/15/20 cho train/val, calibration và final test. Ngưỡng triển khai được khóa bằng công thức `mu + 3 sigma` trên calibration subset normal 15%. Lỗi giả lập chỉ dùng ở bước đánh giá cuối trên final test; các chỉ số trên không nên diễn giải như một benchmark độc lập tuyệt đối trên thiết bị/máy giặt khác.
 
 ## Kiến trúc hệ thống
 
@@ -365,9 +365,10 @@ Các tham số quan trọng:
 
 | Tham số | Mặc định |
 |---|---:|
+| `--train-size` | `0.65` |
+| `--calibration-size` | `0.15` |
 | `--test-size` | `0.20` |
 | `--val-size` | `0.15` |
-| `--calibration-size` | `0.15` |
 | `--gentle-target` | `20000` |
 | `--other-target` | `10000` |
 | `--float-epochs` | `200` |
@@ -379,9 +380,9 @@ Các giá trị ngưỡng trong script cần được giữ khớp với báo c�
 |---|---:|---|
 | `VAR_Z_THR1` | `0.105845` | Ranh giới `GENTLE/STRONG`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
 | `VAR_Z_THR2` | `0.386260` | Ranh giới `STRONG/SPIN`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
-| `THRESHOLD_GENTLE` | `0.0363953100` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset hậu huấn luyện |
-| `THRESHOLD_STRONG` | `0.0986705963` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset hậu huấn luyện |
-| `THRESHOLD_SPIN` | `0.0935147945` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset hậu huấn luyện |
+| `THRESHOLD_GENTLE` | `0.0363953100` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset 15% |
+| `THRESHOLD_STRONG` | `0.0986705963` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset 15% |
+| `THRESHOLD_SPIN` | `0.0935147945` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset 15% |
 
 Ngưỡng triển khai không được chọn bằng cách tối ưu trực tiếp F1-Score trên lỗi giả lập. Lỗi giả lập chỉ dùng ở bước đánh giá cuối trên final test.
 
