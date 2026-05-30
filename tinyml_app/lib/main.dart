@@ -28,9 +28,9 @@ const int    kMaxHistory       = 30;
 
 // Ngưỡng MAE theo từng pha; luôn giữ khớp với model_data_final.h.
 const Map<String, double> kThresholds = {
-  'GENTLE': 0.0469,
-  'STRONG': 0.1077,
-  'SPIN':   0.0989,
+  'GENTLE': 0.0364,
+  'STRONG': 0.0987,
+  'SPIN':   0.0935,
 };
 
 // ─────────────────────────────────────────────
@@ -1147,8 +1147,8 @@ class _StatsTab extends StatelessWidget {
 
 
         
-        // Thông số kỹ thuật khớp với firmware và latex_v2.
-        _SectionHeader(title: 'Thông số kỹ thuật (V2)'),
+        // Thông số kỹ thuật khớp với firmware và báo cáo.
+        _SectionHeader(title: 'Thông số kỹ thuật'),
         const SizedBox(height: 12),
         _buildTechInfo(label: 'Kiến trúc', value: 'Symmetric Autoencoder'),
         _buildTechInfo(label: 'Cấu trúc', value: '19-128-64-32-64-128-19'),

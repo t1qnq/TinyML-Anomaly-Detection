@@ -1,4 +1,4 @@
-﻿#ifndef MODEL_DATA_FINAL_H
+#ifndef MODEL_DATA_FINAL_H
 #define MODEL_DATA_FINAL_H
 
 // Final leakage-free INT8 model bundle. Regenerate with final_training.py.
@@ -8,13 +8,14 @@
 // windows in train_features_v6.csv, using column 18 (var_z):
 //   VAR_Z_THR1 = boundary between GENTLE and STRONG clusters
 //   VAR_Z_THR2 = boundary between STRONG and SPIN clusters
+// MAE thresholds are locked with mu + 3 sigma on a normal calibration subset.
 
 const float VAR_Z_THR1 = 0.1058450000f;
 const float VAR_Z_THR2 = 0.3862600000f;
 
-const float THRESHOLD_GENTLE = 0.0468946621f;
-const float THRESHOLD_STRONG = 0.1076632291f;
-const float THRESHOLD_SPIN   = 0.0989401191f;
+const float THRESHOLD_GENTLE = 0.0363953100f;
+const float THRESHOLD_STRONG = 0.0986705963f;
+const float THRESHOLD_SPIN   = 0.0935147945f;
 
 const float MEL_MIN[13]   = {-80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f, -80.0000000000f};
 const float MEL_SCALE[13] = {80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f, 80.0000000000f};

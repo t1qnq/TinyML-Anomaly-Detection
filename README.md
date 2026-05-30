@@ -43,13 +43,13 @@ Các quyết định thiết kế chính:
 
 ## Kết quả final
 
-Kết quả đánh giá offline trên tập hold-out của phiên bản final:
+Kết quả đánh giá offline trên final test sau khi ngưỡng đã được khóa bằng calibration subset:
 
 | Pha | Threshold MAE | F1-Score | Precision | Recall | AUC |
 |---|---:|---:|---:|---:|---:|
-| `GENTLE` | `0.0468946621` | `0.9986` | `0.9973` | `1.0000` | `1.0000` |
-| `STRONG` | `0.1076632291` | `0.9821` | `0.9735` | `0.9910` | `0.9888` |
-| `SPIN` | `0.0989401191` | `0.9707` | `0.9748` | `0.9667` | `0.9917` |
+| `GENTLE` | `0.0363953100` | `0.9936` | `0.9873` | `1.0000` | `1.0000` |
+| `STRONG` | `0.0986705963` | `0.9867` | `0.9737` | `1.0000` | `0.9887` |
+| `SPIN` | `0.0935147945` | `0.9836` | `0.9677` | `1.0000` | `0.9912` |
 
 Các thông số triển khai:
 
@@ -63,7 +63,7 @@ Các thông số triển khai:
 | Biến global/static RAM | khoảng 62 KB |
 | Tần suất publish MQTT | tối đa 1 Hz hoặc khi đổi trạng thái |
 
-Lưu ý diễn giải: tập hold-out được dùng trong quy trình kiểm chứng offline và hiệu chỉnh ngưỡng của phiên bản final; các chỉ số trên không nên diễn giải như một benchmark độc lập tuyệt đối trên thiết bị/máy giặt khác.
+Lưu ý diễn giải: ngưỡng triển khai được khóa bằng công thức `mu + 3 sigma` trên calibration subset normal. Lỗi giả lập chỉ dùng ở bước đánh giá cuối trên final test; các chỉ số trên không nên diễn giải như một benchmark độc lập tuyệt đối trên thiết bị/máy giặt khác.
 
 ## Kiến trúc hệ thống
 
@@ -147,7 +147,7 @@ TinyML-Anomaly-Detection/
 | `dataCollection/final_data_collection.ino` | Firmware thu dữ liệu raw từ INMP441 và ADXL345 qua Serial |
 | `final_data_collection.py` | Nhận stream Serial và lưu mỗi mẫu thành `.wav` + `.csv` |
 | `final_feature_extraction.py` | Trích xuất CSV đặc trưng 19 chiều từ dữ liệu đã thu |
-| `final_training.py` | Huấn luyện ba Autoencoder, lượng tử hóa INT8, xuất header final |
+| `final_training.py` | Huấn luyện ba Autoencoder, khóa ngưỡng `mu + 3 sigma` từ calibration subset, đánh giá final test và xuất header INT8 |
 | `firmware_v11/final_firmware.ino` | Firmware runtime chạy suy luận TinyML và publish MQTT |
 | `firmware_v11/model_data_final.h` | Bundle model/scaler/ngưỡng final cho firmware |
 | `tools/generate_env_config.py` | Sinh config local từ `.env` cho firmware và Flutter |
@@ -367,10 +367,23 @@ Các tham số quan trọng:
 |---|---:|
 | `--test-size` | `0.20` |
 | `--val-size` | `0.15` |
+| `--calibration-size` | `0.15` |
 | `--gentle-target` | `20000` |
 | `--other-target` | `10000` |
 | `--float-epochs` | `200` |
 | `--qat-epochs` | `80` |
+
+Các giá trị ngưỡng trong script cần được giữ khớp với báo cáo và firmware:
+
+| Giá trị | Con số | Ý nghĩa |
+|---|---:|---|
+| `VAR_Z_THR1` | `0.105845` | Ranh giới `GENTLE/STRONG`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
+| `VAR_Z_THR2` | `0.386260` | Ranh giới `STRONG/SPIN`, tính bằng K-Means trên cột `var_z` của 14.000 vector đặc trưng gốc |
+| `THRESHOLD_GENTLE` | `0.0363953100` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset hậu huấn luyện |
+| `THRESHOLD_STRONG` | `0.0986705963` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset hậu huấn luyện |
+| `THRESHOLD_SPIN` | `0.0935147945` | Ngưỡng MAE theo công thức `mu + 3 sigma` trên calibration subset hậu huấn luyện |
+
+Ngưỡng triển khai không được chọn bằng cách tối ưu trực tiếp F1-Score trên lỗi giả lập. Lỗi giả lập chỉ dùng ở bước đánh giá cuối trên final test.
 
 Đầu ra:
 
@@ -388,6 +401,12 @@ results_final.json
 - 3 mảng model TFLite INT8
 
 ### 5. Flash firmware runtime
+
+| Phase | Threshold |
+|---|---:|
+| GENTLE | `0.0364` |
+| STRONG | `0.0987` |
+| SPIN | `0.0935` |
 
 Trước khi flash cần có:
 
@@ -427,7 +446,8 @@ Firmware runtime xử lý song song bằng FreeRTOS:
 Log suy luận:
 
 ```text
-[OK   ][GENTLE] MAE:0.0292 (f:0.0295) THR:0.0469 consec:0 t:7839us | wins:2 g:2 st:0 sp:0
+[RAW] mel: ... | rms: x=... y=... z=... | var: x=... y=... z=...
+[OK   ][GENTLE] MAE:0.0292 (f:0.0295) THR:0.0364 consec:0 t:7839us | wins:2 g:2 st:0 sp:0
 ```
 
 Ý nghĩa:
@@ -541,7 +561,7 @@ git diff --check
 Không stage toàn bộ bằng `git add .` nếu workspace có dataset, video, LaTeX hoặc artifact local. Nên stage rõ từng file:
 
 ```powershell
-git add README.md final_feature_extraction.py final_training.py firmware_v11/final_firmware.ino
+git add README.md final_feature_extraction.py final_training.py firmware_v11/model_data_final.h tinyml_app/lib/main.dart
 ```
 
 ## Lỗi thường gặp

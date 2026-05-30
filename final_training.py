@@ -8,7 +8,7 @@ Script huấn luyện một Autoencoder riêng cho từng pha giặt:
 Các cam kết của pipeline:
   - tách train/validation/test trên dữ liệu raw trước khi augmentation
   - scaler rung chỉ được fit trên tập train
-  - tập test hold-out không đi qua augmentation
+  - tập final test không đi qua augmentation
   - ngưỡng chuyển pha là ranh giới K-Means trên `var_z` raw
 """
 
@@ -51,14 +51,14 @@ WEIGHT_SUM = float(np.sum(WEIGHTS))
 
 PHASES = ("GENTLE", "STRONG", "SPIN")
 
-# Hai ngưỡng định tuyến pha bên dưới là giá trị đã dùng trong latex_v2.
+# Hai ngưỡng định tuyến pha bên dưới là giá trị đã dùng trong báo cáo hiện tại.
 # Chúng được tính trước khi đóng gói final bằng K-Means 3 cụm trên cột 18
 # (`var_z`) của toàn bộ 14.000 vector đặc trưng raw:
 #   0.105845 tách GENTLE và STRONG
 #   0.386260 tách STRONG và SPIN
 #
 # Code final cố định hai giá trị này để tái lập đúng thí nghiệm, hình và bảng
-# đã chốt trong latex_v2; đây không phải ngưỡng chọn tay.
+# đã chốt trong báo cáo; đây không phải ngưỡng chọn tay.
 VAR_Z_THR1 = 0.105845
 VAR_Z_THR2 = 0.386260
 
@@ -68,6 +68,7 @@ class PhaseTrainResult:
     """Gói kết quả cần để đánh giá và xuất model của một pha."""
 
     model: tf.keras.Model
+    calibration_raw: np.ndarray
     test_raw: np.ndarray
     scaler: RobustScaler
 
@@ -88,7 +89,7 @@ def load_training_dependencies() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    """Đọc các tham số tái lập và đường dẫn xuất file đúng theo latex_v2."""
+    """Đọc các tham số tái lập và đường dẫn xuất file đúng theo báo cáo."""
     parser = argparse.ArgumentParser(description="Train final leakage-free TinyML models")
     parser.add_argument("--csv", default="train_features_v6.csv")
     parser.add_argument("--out-header", default="firmware_v11/model_data_final.h")
@@ -96,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-size", type=float, default=0.20)
     parser.add_argument("--val-size", type=float, default=0.15)
+    parser.add_argument("--calibration-size", type=float, default=0.15)
     parser.add_argument("--gentle-target", type=int, default=20000)
     parser.add_argument("--other-target", type=int, default=10000)
     parser.add_argument("--float-epochs", type=int, default=200)
@@ -176,7 +178,7 @@ def scale_subset(raw: np.ndarray, vib_scaler: RobustScaler) -> np.ndarray:
 
 
 def augment_raw_data(x_raw: np.ndarray, target_size: int) -> np.ndarray:
-    """Tăng cường dữ liệu raw đúng như `training_v2.py`.
+    """Tăng cường dữ liệu raw đúng như `final_training.py`.
 
     Đây là tầng augmentation đầu tiên của pipeline v2: scale biên độ rung,
     dịch mức năng lượng audio, thêm jitter nhỏ cho Mel và rung. Nhiễu Gaussian
@@ -228,13 +230,24 @@ def train_phase(
     phase: str,
     args: argparse.Namespace,
 ) -> PhaseTrainResult:
-    """Huấn luyện một Autoencoder QAT không rò rỉ và giữ lại tập test hold-out."""
+    """Huấn luyện một Autoencoder QAT không rò rỉ và giữ lại tập final test."""
     if len(x_raw) < 10:
         raise ValueError(f"{phase}: not enough samples ({len(x_raw)})")
 
     train_raw, test_raw = train_test_split(
         x_raw,
         test_size=args.test_size,
+        random_state=args.seed,
+        shuffle=True,
+    )
+    calibration_ratio = args.calibration_size / (1.0 - args.test_size)
+    if not 0.0 < calibration_ratio < 1.0:
+        raise ValueError(
+            f"{phase}: calibration_size must be inside the train/validation pool"
+        )
+    _, calibration_raw = train_test_split(
+        train_raw,
+        test_size=calibration_ratio,
         random_state=args.seed,
         shuffle=True,
     )
@@ -246,7 +259,7 @@ def train_phase(
     )
 
     target = args.gentle_target if phase == "GENTLE" else args.other_target
-    # Giữ đúng cách tính của training_v2.py: 85% augmentation cho train và
+    # Giữ đúng cách tính của final_training.py: 85% augmentation cho train và
     # 15% cho validation trong cấu hình v2 mặc định.
     target_train = int(target * (1.0 - args.val_size))
     target_val = int(target * args.val_size)
@@ -292,13 +305,14 @@ def train_phase(
 
     qat_model.save(f"model_{phase.lower()}_best_final.h5")
     print(
-        f"{phase}: train={len(train_sub_raw)} val={len(val_raw)} test={len(test_raw)}"
+        f"{phase}: train={len(train_sub_raw)} val={len(val_raw)} "
+        f"calibration={len(calibration_raw)} test={len(test_raw)}"
     )
-    return PhaseTrainResult(qat_model, test_raw, scaler)
+    return PhaseTrainResult(qat_model, calibration_raw, test_raw, scaler)
 
 
 def synthesize_anomalies(x_raw: np.ndarray, phase: str) -> np.ndarray:
-    """Sinh dữ liệu lỗi giả lập có kiểm soát từ các cửa sổ test hold-out."""
+    """Sinh dữ liệu lỗi giả lập có kiểm soát từ các cửa sổ final test."""
     x_anom = x_raw.copy()
     n = len(x_anom)
     strength = 1.5 if phase == "GENTLE" else 1.0
@@ -359,55 +373,34 @@ def run_tflite_mae(model_bytes: bytes, data: np.ndarray) -> np.ndarray:
     return np.asarray(maes, dtype=np.float32)
 
 
-def choose_anomaly_threshold(
-    maes_normal: np.ndarray,
-    maes_anomaly: np.ndarray,
-    phase: str,
-) -> tuple[float, str]:
-    """Chọn ngưỡng cảnh báo MAE đúng theo pipeline v2 trong đồ án.
-
-    Ngưỡng được quét để tối đa F1 trên bộ đánh giá offline normal/anomaly.
-    Để tránh chọn ngưỡng quá sát phân phối normal, ngưỡng cuối cùng bị chặn
-    dưới bởi percentile 95 của normal MAE cho GENTLE và percentile 98 cho
-    STRONG/SPIN.
-    """
-    labels = np.concatenate(
-        [np.zeros(len(maes_normal), dtype=np.int32), np.ones(len(maes_anomaly), dtype=np.int32)]
-    )
-    scores = np.concatenate([maes_normal, maes_anomaly])
-
-    thresholds = np.linspace(np.min(maes_normal), np.max(maes_anomaly), 200)
-    best_thr = float(thresholds[0])
-    best_f1 = -1.0
-    for threshold in thresholds:
-        preds = (scores > threshold).astype(np.int32)
-        current_f1 = f1_score(labels, preds)
-        if current_f1 > best_f1:
-            best_f1 = current_f1
-            best_thr = float(threshold)
-
-    normal_percentile = 95 if phase == "GENTLE" else 98
-    safe_min = float(np.percentile(maes_normal, normal_percentile))
-    return max(best_thr, safe_min), f"optimal_f1_with_normal_p{normal_percentile}"
+def choose_calibration_threshold(
+    maes_calibration: np.ndarray,
+    sigma_k: float = 3.0,
+) -> tuple[float, str, float, float]:
+    """Lock the MAE threshold from normal calibration with mu + k*sigma."""
+    mu = float(np.mean(maes_calibration))
+    sigma = float(np.std(maes_calibration, ddof=0))
+    threshold = mu + sigma_k * sigma
+    return threshold, f"mu_plus_{sigma_k:g}sigma_calibration", mu, sigma
 
 
 def evaluate_phase(
     phase: str,
     result: PhaseTrainResult,
     args: argparse.Namespace,
-) -> tuple[bytes, float, dict[str, float | str]]:
-    """Xuất model một pha và đánh giá MAE normal/anomaly trên tập hold-out."""
+) -> tuple[bytes, float, dict[str, float | int | str]]:
+    """Xuất model một pha và đánh giá MAE normal/anomaly trên tập final test."""
+    calibration_scaled = scale_subset(result.calibration_raw, result.scaler)
     normal_scaled = scale_subset(result.test_raw, result.scaler)
     anomaly_scaled = scale_subset(synthesize_anomalies(result.test_raw, phase), result.scaler)
-    model_bytes = convert_to_int8(result.model, normal_scaled)
+    model_bytes = convert_to_int8(result.model, calibration_scaled)
 
+    maes_calibration = run_tflite_mae(model_bytes, calibration_scaled)
     maes_normal = run_tflite_mae(model_bytes, normal_scaled)
     maes_anomaly = run_tflite_mae(model_bytes, anomaly_scaled)
 
-    threshold, threshold_method = choose_anomaly_threshold(
-        maes_normal,
-        maes_anomaly,
-        phase,
+    threshold, threshold_method, calibration_mu, calibration_sigma = choose_calibration_threshold(
+        maes_calibration,
     )
 
     labels = np.concatenate(
@@ -416,9 +409,12 @@ def evaluate_phase(
     scores = np.concatenate([maes_normal, maes_anomaly])
     preds = (scores > threshold).astype(np.int32)
 
-    metrics: dict[str, float | str] = {
+    metrics: dict[str, float | int | str] = {
         "threshold": float(threshold),
         "threshold_method": threshold_method,
+        "calibration_mu": calibration_mu,
+        "calibration_sigma": calibration_sigma,
+        "calibration_n": int(len(maes_calibration)),
         "f1": float(f1_score(labels, preds)),
         "precision": float(precision_score(labels, preds)),
         "recall": float(recall_score(labels, preds)),
@@ -472,7 +468,8 @@ def write_model_header(
     header += "// Ngưỡng chuyển pha là ranh giới K-Means trên var_z raw.\n"
     header += "// Nguồn: toàn bộ 14.000 cửa sổ feature raw từ train_features_v6.csv.\n"
     header += "// VAR_Z_THR1: ranh giới GENTLE | STRONG.\n"
-    header += "// VAR_Z_THR2: ranh giới STRONG | SPIN.\n\n"
+    header += "// VAR_Z_THR2: ranh giới STRONG | SPIN.\n"
+    header += "// Ngưỡng MAE được khóa bằng mu + 3 sigma trên normal calibration subset.\n\n"
     header += f"const float VAR_Z_THR1 = {float(phase_cfg['thr1']):.10f}f;\n"
     header += f"const float VAR_Z_THR2 = {float(phase_cfg['thr2']):.10f}f;\n\n"
     header += f"const float THRESHOLD_GENTLE = {thresholds['GENTLE']:.10f}f;\n"
@@ -498,7 +495,7 @@ def write_model_header(
 
 
 def main() -> None:
-    """Chạy toàn bộ pipeline huấn luyện, đánh giá hold-out và xuất header."""
+    """Chạy toàn bộ pipeline huấn luyện, đánh giá final test và xuất header."""
     args = parse_args()
     load_training_dependencies()
     set_reproducibility(args.seed)
@@ -521,7 +518,7 @@ def main() -> None:
 
     models_bytes: dict[str, bytes] = {}
     thresholds: dict[str, float] = {}
-    metrics: dict[str, dict[str, float | str]] = {}
+    metrics: dict[str, dict[str, float | int | str]] = {}
     for phase in PHASES:
         model_bytes, threshold, phase_metrics = evaluate_phase(phase, train_results[phase], args)
         models_bytes[phase] = model_bytes
@@ -535,11 +532,15 @@ def main() -> None:
         "version": "final_leakage_free",
         "seed": args.seed,
         "split": {
-            "test_size": args.test_size,
+            "train_val": 1.0 - args.test_size,
+            "final_test": args.test_size,
             "val_size": args.val_size,
+            "calibration_subset": "post_training_subset_inside_train_val",
+            "calibration_size": args.calibration_size,
         },
         "phase_switch": phase_cfg,
-        "anomaly_threshold_mode": "optimal_f1_with_normal_percentile_guard",
+        "anomaly_threshold_mode": "mu_plus_3sigma_calibration",
+        "sigma_k": 3.0,
         "thresholds": thresholds,
         "phases": metrics,
     }
@@ -554,3 +555,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

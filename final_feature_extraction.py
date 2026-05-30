@@ -39,14 +39,6 @@ VIB_ROWS_PER_WINDOW = 1000
 
 AUDIO_SAMPLES_PER_WINDOW = AUDIO_SAMPLE_RATE_HZ * WINDOW_SECONDS
 
-# Các ngưỡng clip này thuộc pipeline tạo train_features_v6.csv.
-# Mục đích là giới hạn một số xung rung hiếm trước khi lưu feature,
-# nhờ đó extractor giữ đúng phân phối dữ liệu đã báo cáo trong latex_v2.
-VIB_CLIP_RMS_Z = 0.30
-VIB_CLIP_VAR_X = 0.001097
-VIB_CLIP_VAR_Y = 0.000978
-VIB_CLIP_VAR_Z = 0.060464
-
 MEL_FILTERBANK = (
     (1, 11, 21),
     (11, 21, 32),
@@ -145,11 +137,11 @@ def mel_features(segment: np.ndarray) -> np.ndarray:
 
 
 def vibration_features(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Tính 6 đặc trưng RMS/phương sai đã clip cho ba trục ADXL345.
+    """Tính 6 đặc trưng RMS/phương sai raw cho ba trục ADXL345.
 
-    Thứ tự đầu ra là [rms_x, var_x, rms_y, var_y, rms_z, var_z]. Các ngưỡng
-    clip cố định giúp một vài xung cảm biến hiếm không chi phối phân pha và
-    quá trình fit scaler trong pipeline huấn luyện.
+    Thứ tự đầu ra là [rms_x, var_x, rms_y, var_y, rms_z, var_z]. Extractor không
+    clip `var_z` trước khi lưu CSV vì cột này là tín hiệu dùng để chia pha
+    GENTLE/STRONG/SPIN trong pipeline huấn luyện.
     """
     x = x.astype(np.float32, copy=False)
     y = y.astype(np.float32, copy=False)
@@ -163,15 +155,10 @@ def vibration_features(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarra
         """Tính phương sai gia tốc cho một trục."""
         return float(np.var(values))
 
-    features = np.array(
+    return np.array(
         [rms(x), var(x), rms(y), var(y), rms(z), var(z)],
         dtype=np.float32,
     )
-    features[1] = min(features[1], VIB_CLIP_VAR_X)
-    features[3] = min(features[3], VIB_CLIP_VAR_Y)
-    features[4] = min(features[4], VIB_CLIP_RMS_Z)
-    features[5] = min(features[5], VIB_CLIP_VAR_Z)
-    return features
 
 
 def extract_file(wav_path: str | Path, csv_path: str | Path) -> tuple[list[np.ndarray], str | None]:
